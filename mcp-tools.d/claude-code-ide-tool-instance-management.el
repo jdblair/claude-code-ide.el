@@ -114,18 +114,39 @@ Returns a list of instance information."
   ;; Clean up dead processes first
   (claude-code-ide--cleanup-dead-processes)
 
-  (let ((instances '()))
-    (maphash (lambda (directory _process)
-               (let* ((buffer-name (funcall claude-code-ide-buffer-name-function directory))
-                      (buffer (get-buffer buffer-name))
-                      (status (if (and buffer (buffer-live-p buffer))
+  (let ((instances '())
+        (seen-buffers (make-hash-table :test 'equal)))
+    ;; First, collect instances from the process table
+    (maphash (lambda (directory process)
+               (let* ((buffer (process-buffer process))
+                      (buffer-name (when (buffer-live-p buffer)
+                                    (buffer-name buffer)))
+                      (status (if (and buffer-name (buffer-live-p buffer))
                                   "running"
                                 "dead")))
-                 (push (list :directory directory
-                            :buffer-name buffer-name
-                            :status status)
-                       instances)))
+                 (when buffer-name
+                   (puthash buffer-name t seen-buffers)
+                   (push (list :directory directory
+                              :buffer-name buffer-name
+                              :status status)
+                         instances))))
              claude-code-ide--processes)
+
+    ;; Also check for any Claude Code buffers not in the process table
+    ;; (handles custom buffer names from spawn-instance)
+    (dolist (buffer (buffer-list))
+      (let ((buffer-name (buffer-name buffer)))
+        (when (and (not (gethash buffer-name seen-buffers))
+                   (buffer-live-p buffer)
+                   (with-current-buffer buffer
+                     (and (boundp 'claude-code-ide--session-directory)
+                          claude-code-ide--session-directory)))
+          (with-current-buffer buffer
+            (push (list :directory claude-code-ide--session-directory
+                       :buffer-name buffer-name
+                       :status "running")
+                  instances)))))
+
     (nreverse instances)))
 
 (defun claude-code-ide-instance--kill (buffer-name)

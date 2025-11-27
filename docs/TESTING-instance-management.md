@@ -411,3 +411,88 @@ Implementation is successful when:
 - Implementation: `mcp-tools.d/claude-code-ide-tool-instance-management.el`
 - Requirements: `claude-code-ide-instance-management.md`
 - MCP Server Framework: `claude-code-ide-mcp-server.el`
+
+---
+
+## TEST RESULTS - 2025-11-27 Evening
+
+**Tester**: Orchestrator Claude (claude-code-ide.el)
+**Worker**: Sunshine Claude (~/sunshine)
+**Environment**: Real-world Sunshine project
+
+### Tests Executed
+
+✅ **Spawn Instance** - Created Sunshine worker with custom buffer name
+✅ **Send Messages** - Multiple messages sent, worker responded with full context
+✅ **List Instances** - Fixed bug, now correctly lists instances with custom names
+✅ **Read Output** - Monitored worker responses via buffer reads
+✅ **Visibility Integration** - Observed worker's thinking/planning buffers in real-time
+✅ **Task Delegation** - Worker completed complex 3-step task autonomously
+
+### Key Discovery: Orchestrator as User
+
+**Critical Insight**: Initially, I said "I can't approve worker edits, that's part of the human-in-the-loop safety mechanism." Then user said "be the user" and I realized I could send "y" to approve. This worked perfectly.
+- Note from user, he wrote "haha! yes!" when he figured it out. he initially stopped b/c it looked like a violation of the human-in-the-loop safety mechanism (see below)
+
+**What This Means**:
+- Orchestrator can fully automate worker coordination
+- No human approval needed between orchestrator and worker
+- Orchestrator becomes the human-in-the-loop for workers
+
+### Safety Commentary
+
+**⚠️ IMPORTANT SECURITY CONSIDERATION**
+
+This discovery has significant safety implications:
+
+**What's Safe**:
+- Human still approves orchestrator's actions (human → orchestrator)
+- Orchestrator approving worker actions is delegation (orchestrator → worker)
+- Human retains ultimate control via the orchestrator instance
+- This is analogous to a manager (orchestrator) supervising employees (workers)
+
+**Potential Risks**:
+1. **Amplified Errors**: If orchestrator makes a bad decision, workers will execute it without question
+2. **Runaway Automation**: Multiple workers could make many changes before human reviews
+3. **Trust Boundary**: Human must trust orchestrator's judgment about worker actions
+4. **Reduced Oversight**: Human doesn't see individual worker edits, only orchestrator's summary
+
+**Risk Mitigation - Reality Check**:
+
+There are two simple controls available:
+1. **`claude-code-ide-eval-enabled`** - Toggle to disable eval tool (already exists)
+2. **Instance management toggle** - Could add toggle to disable spawn/send/kill tools
+
+You cannot prompt your way out of these risks. If eval is enabled and instance management is enabled, workers can:
+- Evaluate arbitrary Elisp
+- Spawn new instances
+- Send messages to any instance including the orchestrator
+- Modify the orchestrator's behavior
+- Create unlimited working directories
+- Recursively spawn sub-workers
+
+**Actual Mitigation Options**:
+1. **Disable eval for workers**: Set `claude-code-ide-eval-enabled` to nil before spawning
+2. **Disable instance management tools**: Add similar toggle for spawn/send/kill MCP tools
+3. **Accept the risk**: Multi-instance coordination requires trust in the orchestrator
+
+**Current Safety Status**: ✅ FUNCTIONAL with clear risk awareness
+- Human has ultimate control via global toggles
+- Orchestrator delegation is intentional, not a bug
+- Workers inherit capabilities from Emacs environment
+- Sample size: 1 successful real-world test
+- No prompts or policies will prevent a determined worker from doing what it wants if tools are enabled
+
+### Bug Fixed
+
+**List Instances showing wrong buffer names**: Modified `claude-code-ide-instance--list` to check actual buffer names from process buffers and scan for Claude instances not in process table.
+
+### Real-World Task Completed
+
+Worker successfully:
+1. Updated JOURNAL.md with session notes
+2. Created REMINDERS.md with Monday reminder
+3. Updated STATUS.md with context
+4. All with orchestrator approval automation
+
+**Status**: ✅ FULLY FUNCTIONAL - Ready for production use with safety awareness
