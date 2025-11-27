@@ -31,11 +31,25 @@
 ;;
 ;; This supports orchestrator patterns where a main Claude instance can delegate
 ;; work to specialized instances with different contexts and instruction sets.
+;;
+;; Security: These tools allow spawning and controlling additional Claude
+;; instances. Workers can potentially spawn sub-workers, send messages to
+;; any instance including the orchestrator, and create unlimited working
+;; directories. Use with caution and only enable when needed.
 
 ;;; Code:
 
 (require 'claude-code-ide-mcp-server)
 (require 'claude-code-ide-debug)
+
+;;; Customization
+
+(defcustom claude-code-ide-instance-management-enabled t
+  "Enable instance management MCP tools.
+When nil, tools will refuse to spawn, send, or kill instances.
+Set to t to enable instance management."
+  :type 'boolean
+  :group 'claude-code-ide)
 
 ;; Forward declarations for main claude-code-ide functions
 (declare-function claude-code-ide--start-session "claude-code-ide")
@@ -54,6 +68,10 @@
   "Spawn a new Claude Code instance in DIRECTORY with BUFFER-NAME.
 If INITIAL-MESSAGE is non-nil, send it to the instance after spawning.
 Returns information about the spawned instance."
+  ;; Check if instance management is enabled
+  (unless claude-code-ide-instance-management-enabled
+    (error "Instance management is disabled. Set claude-code-ide-instance-management-enabled to t to enable"))
+
   (unless (file-directory-p directory)
     (error "Directory does not exist: %s" directory))
 
@@ -95,6 +113,10 @@ Returns information about the spawned instance."
 (defun claude-code-ide-instance--send-message (buffer-name message)
   "Send MESSAGE to the Claude Code instance with BUFFER-NAME.
 Returns success status."
+  ;; Check if instance management is enabled
+  (unless claude-code-ide-instance-management-enabled
+    (error "Instance management is disabled. Set claude-code-ide-instance-management-enabled to t to enable"))
+
   (let ((buffer (get-buffer buffer-name)))
     (if (not buffer)
         (error "Instance buffer not found: %s" buffer-name)
@@ -152,6 +174,10 @@ Returns a list of instance information."
 (defun claude-code-ide-instance--kill (buffer-name)
   "Kill the Claude Code instance with BUFFER-NAME.
 Returns success status."
+  ;; Check if instance management is enabled
+  (unless claude-code-ide-instance-management-enabled
+    (error "Instance management is disabled. Set claude-code-ide-instance-management-enabled to t to enable"))
+
   (let ((buffer (get-buffer buffer-name)))
     (if (not buffer)
         (error "Instance buffer not found: %s" buffer-name)
@@ -250,6 +276,15 @@ ARGS should contain:
    :args '((:name "buffer_name"
                   :type string
                   :description "Name of the instance buffer to kill"))))
+
+;;;###autoload
+(defun claude-code-ide-instance-management-toggle ()
+  "Toggle instance management tools enabled/disabled."
+  (interactive)
+  (setq claude-code-ide-instance-management-enabled
+        (not claude-code-ide-instance-management-enabled))
+  (message "Claude Code instance management %s"
+           (if claude-code-ide-instance-management-enabled "enabled" "disabled")))
 
 (provide 'claude-code-ide-tool-instance-management)
 ;;; claude-code-ide-tool-instance-management.el ends here

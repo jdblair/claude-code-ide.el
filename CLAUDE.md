@@ -148,6 +148,37 @@ The instance management MCP tools enable orchestrator patterns where a main Clau
 - Coordinate multiple tasks in parallel with different instruction sets
 - Each instance reads its own CLAUDE.md from its working directory
 
+**Security:**
+Instance management tools are **enabled by default** but can be disabled for safety.
+
+**To disable:**
+```elisp
+(setq claude-code-ide-instance-management-enabled nil)
+```
+
+Or interactively: `M-x claude-code-ide-instance-management-toggle`
+
+**Security considerations:**
+- Workers can spawn sub-workers if tools are enabled
+- Workers can send messages to any instance including the orchestrator
+- Workers can create unlimited working directories
+- If eval is also enabled, workers can execute arbitrary Elisp
+- You cannot prompt your way out of these risks - use the toggles to control access
+
+**Additional protection:**
+Consider requiring user approval for instance management tools in `~/.claude/settings.json`:
+```json
+{
+  "permissions": {
+    "ask": [
+      "mcp__emacs-tools__claude-code-ide-mcp-spawn-instance",
+      "mcp__emacs-tools__claude-code-ide-mcp-send-to-instance",
+      "mcp__emacs-tools__claude-code-ide-mcp-kill-instance"
+    ]
+  }
+}
+```
+
 **Testing:**
 See `docs/TESTING-instance-management.md` for comprehensive test plan and usage examples.
 
