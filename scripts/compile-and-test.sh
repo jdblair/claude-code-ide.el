@@ -38,6 +38,18 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT" || exit 1
 echo "Running compile and test checks..." >&2
 
+# Find Emacs executable
+EMACS_CMD="emacs"
+if ! command -v emacs &> /dev/null; then
+    # Check for macOS Emacs.app
+    if [ -x "/Applications/Emacs.app/Contents/MacOS/Emacs" ]; then
+        EMACS_CMD="/Applications/Emacs.app/Contents/MacOS/Emacs"
+    else
+        echo "✗ Emacs not found in PATH or /Applications/Emacs.app" >&2
+        exit 1
+    fi
+fi
+
 # Function to check if Emacs package directory exists
 find_emacs_package() {
     local package="$1"
@@ -63,6 +75,14 @@ if WEBSOCKET_DIR=$(find_emacs_package "emacs-websocket"); then
     LOAD_PATH="$LOAD_PATH -L $WEBSOCKET_DIR"
 fi
 
+if COMPAT_DIR=$(find_emacs_package "compat"); then
+    LOAD_PATH="$LOAD_PATH -L $COMPAT_DIR"
+fi
+
+if COND_LET_DIR=$(find_emacs_package "cond-let"); then
+    LOAD_PATH="$LOAD_PATH -L $COND_LET_DIR"
+fi
+
 if TRANSIENT_DIR=$(find_emacs_package "transient"); then
     LOAD_PATH="$LOAD_PATH -L $TRANSIENT_DIR"
 fi
@@ -73,7 +93,7 @@ fi
 
 # STEP 1: Compile all elisp files
 echo "=== Running byte-compilation check ===" >&2
-emacs -batch $LOAD_PATH \
+"$EMACS_CMD" -batch $LOAD_PATH \
     --eval "(setq byte-compile-warnings '(not free-vars unresolved))" \
     -f batch-byte-compile *.el
 COMPILE_EXIT_CODE=$?
@@ -90,14 +110,14 @@ NATIVE_COMPILE_AVAILABLE=false
 
 # Check if native compilation is requested and available
 if [ $COMPILE_EXIT_CODE -eq 0 ] && [ "$WITH_NATIVE_COMPILE" = true ]; then
-    if emacs -batch --eval "(if (featurep 'native-compile) (message \"yes\") (message \"no\"))" 2>&1 | grep -q "yes"; then
+    if "$EMACS_CMD" -batch --eval "(if (featurep 'native-compile) (message \"yes\") (message \"no\"))" 2>&1 | grep -q "yes"; then
         NATIVE_COMPILE_AVAILABLE=true
     fi
 
     if [ "$NATIVE_COMPILE_AVAILABLE" = true ]; then
         echo "" >&2
         echo "=== Running native-compilation check ===" >&2
-        emacs -batch $LOAD_PATH -f batch-native-compile *.el
+        "$EMACS_CMD" -batch $LOAD_PATH -f batch-native-compile *.el
         NATIVE_COMPILE_EXIT_CODE=$?
 
         if [ $NATIVE_COMPILE_EXIT_CODE -eq 0 ]; then
@@ -128,7 +148,7 @@ TEST_FAILED=0
 if [ $COMPILE_EXIT_CODE -eq 0 ] && [ $NATIVE_COMPILE_EXIT_CODE -eq 0 ]; then
     echo "" >&2
     echo "=== Running tests ===" >&2
-    emacs -batch -L . -l ert -l claude-code-ide-tests.el -f ert-run-tests-batch-and-exit >&2
+    "$EMACS_CMD" -batch -L . -l ert -l claude-code-ide-tests.el -f ert-run-tests-batch-and-exit >&2
     TEST_EXIT_CODE=$?
 
     if [ $TEST_EXIT_CODE -eq 0 ]; then
