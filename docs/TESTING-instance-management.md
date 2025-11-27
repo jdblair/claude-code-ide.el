@@ -460,8 +460,8 @@ This discovery has significant safety implications:
 **Risk Mitigation - Reality Check**:
 
 There are two simple controls available:
-1. **`claude-code-ide-eval-enabled`** - Toggle to disable eval tool (already exists)
-2. **Instance management toggle** - Could add toggle to disable spawn/send/kill tools
+1. **`claude-code-ide-eval-enabled`** - Toggle to disable eval tool (default: off)
+2. **`claude-code-ide-instance-management-enabled`** - Toggle to disable spawn/send/kill tools (default: on)
 
 You cannot prompt your way out of these risks. If eval is enabled and instance management is enabled, workers can:
 - Evaluate arbitrary Elisp
@@ -473,7 +473,7 @@ You cannot prompt your way out of these risks. If eval is enabled and instance m
 
 **Actual Mitigation Options**:
 1. **Disable eval for workers**: Set `claude-code-ide-eval-enabled` to nil before spawning
-2. **Disable instance management tools**: Add similar toggle for spawn/send/kill MCP tools
+2. **Disable instance management tools**: Set `claude-code-ide-instance-management-enabled` to nil
 3. **Accept the risk**: Multi-instance coordination requires trust in the orchestrator
 
 **Current Safety Status**: ✅ FUNCTIONAL with clear risk awareness
@@ -496,3 +496,29 @@ Worker successfully:
 4. All with orchestrator approval automation
 
 **Status**: ✅ FULLY FUNCTIONAL - Ready for production use with safety awareness
+
+---
+
+## IMPLEMENTATION UPDATE - 2025-11-27 Later
+
+**Instance Management Toggle Implemented**:
+
+Following the security analysis above, `claude-code-ide-instance-management-enabled` toggle has been implemented:
+- Default: **enabled** (t) - instance management is a useful feature
+- Can be disabled: `(setq claude-code-ide-instance-management-enabled nil)`
+- Interactive toggle: `M-x claude-code-ide-instance-management-toggle`
+- All spawn/send/kill operations check the flag and fail with clear error when disabled
+
+**Documentation Updated**:
+- CLAUDE.md now includes security section with toggle usage
+- Clear statement that prompts cannot prevent determined misuse
+- Suggests Claude Code permissions settings as additional layer
+
+**Testing Status**:
+- All 73 tests pass (65 passed, 8 skipped)
+- Toggle not yet tested in practice - will test when needed
+
+**Next Steps**:
+- Test toggle functionality with orchestrator/worker pattern
+- Verify error messages are clear when disabled
+- Test that disabling blocks all instance management operations
