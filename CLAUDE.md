@@ -25,6 +25,7 @@ This package integrates Claude Code CLI with Emacs via WebSocket and the Model C
 **Modular MCP Tools (mcp-tools.d/):**
 - `claude-code-ide-tool-buffer-management.el` - Buffer operations (list, read, goto, reload)
 - `claude-code-ide-tool-eval.el` - Emacs Lisp evaluation (disabled by default, see Security section)
+- `claude-code-ide-tool-instance-management.el` - Multi-instance coordination (spawn, send, list, kill)
 
 ## Hooks
 
@@ -130,6 +131,28 @@ Consider requiring user approval for the eval tool in `~/.claude/settings.json`:
   }
 }
 ```
+
+## Multi-Instance Coordination
+
+The instance management MCP tools enable orchestrator patterns where a main Claude instance can spawn and coordinate specialized worker instances with different contexts.
+
+**Available Tools:**
+- `mcp__emacs-tools__claude-code-ide-mcp-spawn-instance` - Start new Claude instance in different directory
+- `mcp__emacs-tools__claude-code-ide-mcp-send-to-instance` - Send message to running instance
+- `mcp__emacs-tools__claude-code-ide-mcp-list-instances` - List all running instances
+- `mcp__emacs-tools__claude-code-ide-mcp-kill-instance` - Terminate an instance
+
+**Use Cases:**
+- Delegate heavy data processing to specialized worker instances
+- Maintain focused contexts (e.g., one for dev, one for testing)
+- Coordinate multiple tasks in parallel with different instruction sets
+- Each instance reads its own CLAUDE.md from its working directory
+
+**Testing:**
+See `docs/TESTING-instance-management.md` for comprehensive test plan and usage examples.
+
+**Requirements Document:**
+See `docs/claude-code-ide-instance-management.md` for detailed architecture and implementation notes.
 
 ## Committing code
 Never commit changes unless the user explicitly asks you to.
