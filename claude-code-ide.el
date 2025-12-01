@@ -205,6 +205,15 @@ display-buffer behavior."
   :type 'boolean
   :group 'claude-code-ide)
 
+(defcustom claude-code-ide-side-window-persistent nil
+  "Whether side windows should be protected from deletion.
+When non-nil, side windows cannot be deleted with `delete-other-windows'.
+When nil (default), side windows can be deleted normally, which is better
+for multi-instance workflows where you want to switch between different
+Claude sessions without accumulating undeletable windows."
+  :type 'boolean
+  :group 'claude-code-ide)
+
 (defcustom claude-code-ide-terminal-backend 'vterm
   "Terminal backend to use for Claude Code sessions.
 Can be either `vterm' or `eat'.  The vterm backend is the default
@@ -580,7 +589,9 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
              ;; Use side window
              (let* ((side claude-code-ide-window-side)
                     (slot 0)
-                    (window-parameters '((no-delete-other-windows . t)))
+                    (window-parameters
+                     (when claude-code-ide-side-window-persistent
+                       '((no-delete-other-windows . t))))
                     (display-buffer-alist
                      `((,(regexp-quote (buffer-name buffer))
                         (display-buffer-in-side-window)
@@ -590,7 +601,8 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
                             `((window-width . ,claude-code-ide-window-width)))
                         ,@(when (memq side '(top bottom))
                             `((window-height . ,claude-code-ide-window-height)))
-                        (window-parameters . ,window-parameters)))))
+                        ,@(when window-parameters
+                            `((window-parameters . ,window-parameters)))))))
                (display-buffer buffer))
            ;; Use regular buffer
            (display-buffer buffer))))
