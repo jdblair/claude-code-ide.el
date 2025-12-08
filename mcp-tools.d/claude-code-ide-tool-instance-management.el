@@ -215,9 +215,8 @@ ARGS should contain:
         (error "message parameter is required"))
       (claude-code-ide-instance--send-message buffer-name message))))
 
-(defun claude-code-ide-mcp-list-instances (_args)
-  "MCP tool handler for listing all running instances.
-ARGS is ignored."
+(defun claude-code-ide-mcp-list-instances ()
+  "MCP tool handler for listing all running instances."
   (claude-code-ide-mcp-server-with-session-context nil
     (claude-code-ide-instance--list)))
 
