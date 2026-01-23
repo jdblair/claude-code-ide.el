@@ -233,9 +233,9 @@ PARAMS is the parameters alist."
            (arg-specs (plist-get normalized :args))
            (args (claude-code-ide-mcp-http-server--validate-args tool-args arg-specs)))
 
-      ;; Call the function
+      ;; Call the function with args unpacked
       (condition-case err
-          (let ((result (funcall tool-function args)))
+          (let ((result (apply tool-function args)))
             `((content . (((type . "text")
                            (text . ,(claude-code-ide-mcp-http-server--format-result result)))))))
         (quit
@@ -290,7 +290,7 @@ TOOL-SPEC should already be normalized."
 
 (defun claude-code-ide-mcp-http-server--validate-args (args arg-specs)
   "Validate and extract ARGS according to ARG-SPECS.
-Returns a plist of arguments with keyword keys."
+Returns a list of argument values in the order specified by ARG-SPECS."
   (let ((result '()))
     (dolist (spec arg-specs (nreverse result))
       (let* ((name (plist-get spec :name))
@@ -300,9 +300,7 @@ Returns a plist of arguments with keyword keys."
         (when (and (not optional) (not value))
           (signal 'json-rpc-error
                   (list -32602 (format "Missing required argument: %s" name))))
-        ;; Build a plist: push value then keyword
-        (push value result)
-        (push (intern (concat ":" name)) result)))))
+        (push value result)))))
 
 (defun claude-code-ide-mcp-http-server--format-result (result)
   "Format RESULT for display to Claude."
