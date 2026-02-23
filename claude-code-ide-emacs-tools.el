@@ -440,7 +440,11 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
 
   ;; Load and register instance management tools
   (require 'claude-code-ide-tool-instance-management)
-  (claude-code-ide-tool-instance-management-setup))
+  (claude-code-ide-tool-instance-management-setup)
+
+  ;; Load and register window management tools
+  (require 'claude-code-ide-tool-window-management)
+  (claude-code-ide-tool-window-management-setup))
 
 ;;;###autoload
 (defun claude-code-ide-emacs-tools-restart ()
