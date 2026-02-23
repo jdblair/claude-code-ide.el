@@ -105,7 +105,7 @@ Returns information about the spawned instance."
             ;; Return instance information
             (list :directory directory
                   :buffer-name (or custom-buffer-name
-                                  (funcall claude-code-ide-buffer-name-function directory))
+                                   (funcall claude-code-ide-buffer-name-function directory))
                   :status "running"))
         ;; Restore original buffer name function
         (setq claude-code-ide-buffer-name-function orig-buffer-name-fn)))))
@@ -142,15 +142,15 @@ Returns a list of instance information."
     (maphash (lambda (directory process)
                (let* ((buffer (process-buffer process))
                       (buffer-name (when (buffer-live-p buffer)
-                                    (buffer-name buffer)))
+                                     (buffer-name buffer)))
                       (status (if (and buffer-name (buffer-live-p buffer))
                                   "running"
                                 "dead")))
                  (when buffer-name
                    (puthash buffer-name t seen-buffers)
                    (push (list :directory directory
-                              :buffer-name buffer-name
-                              :status status)
+                               :buffer-name buffer-name
+                               :status status)
                          instances))))
              claude-code-ide--processes)
 
@@ -165,8 +165,8 @@ Returns a list of instance information."
                           claude-code-ide--session-directory)))
           (with-current-buffer buffer
             (push (list :directory claude-code-ide--session-directory
-                       :buffer-name buffer-name
-                       :status "running")
+                        :buffer-name buffer-name
+                        :status "running")
                   instances)))))
 
     (nreverse instances)))
@@ -215,8 +215,9 @@ ARGS should contain:
         (error "message parameter is required"))
       (claude-code-ide-instance--send-message buffer-name message))))
 
-(defun claude-code-ide-mcp-list-instances ()
-  "MCP tool handler for listing all running instances."
+(defun claude-code-ide-mcp-list-instances (&optional _args)
+  "MCP tool handler for listing all running instances.
+ARGS is ignored."
   (claude-code-ide-mcp-server-with-session-context nil
     (claude-code-ide-instance--list)))
 
