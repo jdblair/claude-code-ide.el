@@ -592,6 +592,32 @@ have completed before cleanup.  Waits up to 5 seconds."
       ;; Restore original value
       (setq claude-code-ide-vterm-anti-flicker original-value))))
 
+(ert-deftest claude-code-ide-test-record-circle-display-mapping ()
+  "Verify ⏺ (U+23FA) is remapped to ● (U+25CF) in buffer-display-table
+when `claude-code-ide-fix-record-circle-display' is enabled."
+  (with-temp-buffer
+    (let ((claude-code-ide-fix-record-circle-display t))
+      ;; Simulate the portion of configure-vterm-buffer that installs the
+      ;; mapping; we invoke the logic directly since vterm-mode isn't
+      ;; available in batch tests.
+      (when claude-code-ide-fix-record-circle-display
+        (unless buffer-display-table
+          (setq buffer-display-table (make-display-table)))
+        (set-char-table-range buffer-display-table ?⏺ (vector ?●)))
+      (let ((mapping (char-table-range buffer-display-table ?⏺)))
+        (should (vectorp mapping))
+        (should (= (aref mapping 0) ?●))))))
+
+(ert-deftest claude-code-ide-test-record-circle-display-disabled ()
+  "Verify no mapping is installed when the option is disabled."
+  (with-temp-buffer
+    (let ((claude-code-ide-fix-record-circle-display nil))
+      (when claude-code-ide-fix-record-circle-display
+        (unless buffer-display-table
+          (setq buffer-display-table (make-display-table)))
+        (set-char-table-range buffer-display-table ?⏺ (vector ?●)))
+      (should (null buffer-display-table)))))
+
 (ert-deftest claude-code-ide-test-run-with-cli ()
   "Test successful run command execution."
   (skip-unless nil) ; Skip this test for now

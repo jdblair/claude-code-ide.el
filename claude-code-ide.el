@@ -251,6 +251,24 @@ matching to maintain responsiveness while improving visual quality."
   :type 'boolean
   :group 'claude-code-ide)
 
+(defcustom claude-code-ide-fix-record-circle-display t
+  "Remap U+23FA (⏺ BLACK CIRCLE FOR RECORD) to U+25CF (● BLACK CIRCLE) for display.
+
+The ⏺ character is used by the Claude Code TUI to mark tool calls.
+Few fonts include U+23FA, so it is rendered by a fallback font whose
+line metrics differ from the primary monospace font, making the lines
+with ⏺ taller than surrounding text.  During the \"running\" animation
+the bullet alternates with a space, causing all text below it to bounce
+up and down by several pixels.
+
+When this option is non-nil, a buffer-local display table in each vterm
+buffer maps U+23FA to U+25CF, which is visually near-identical (both
+are filled circles) and is covered by common monospace fonts such as
+Menlo, DejaVu Sans Mono, and Source Code Pro.  The underlying buffer
+content is unchanged — copy and paste still yield U+23FA."
+  :type 'boolean
+  :group 'claude-code-ide)
+
 (defcustom claude-code-ide-vterm-render-delay 0.005
   "Rendering optimization delay for batched terminal updates.
 This parameter defines the collection window for related terminal
@@ -431,6 +449,12 @@ cursor management, and process buffering for superior user experience."
     (hl-line-mode -1))
   ;; make sure the non-breaking space in the prompt isn't themed
   (face-remap-add-relative 'nobreak-space :inherit 'default)
+  ;; Remap U+23FA (⏺) display to U+25CF (●) so lines with the bullet
+  ;; share the primary font's metrics and don't bounce during animation.
+  (when claude-code-ide-fix-record-circle-display
+    (unless buffer-display-table
+      (setq buffer-display-table (make-display-table)))
+    (set-char-table-range buffer-display-table ?⏺ (vector ?●)))
   ;; Register hook for copy-mode cursor visibility
   (add-hook 'vterm-copy-mode-hook #'claude-code-ide--vterm-copy-mode-hook nil t)
   ;; Increase process read buffering to batch more updates together
