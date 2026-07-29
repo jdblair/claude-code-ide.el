@@ -187,33 +187,26 @@ Returns success status."
 
 ;;; MCP Tool Handlers
 
-(defun claude-code-ide-mcp-spawn-instance (args)
+(defun claude-code-ide-mcp-spawn-instance (directory &optional buffer_name initial_message)
   "MCP tool handler for spawning a new Claude Code instance.
-ARGS should contain:
-  :directory - Working directory for the new instance (required)
-  :buffer_name - Custom buffer name (optional)
-  :initial_message - Message to send after spawning (optional)"
+DIRECTORY is the working directory for the new instance.
+BUFFER_NAME is an optional custom buffer name.
+INITIAL_MESSAGE is an optional message to send after spawning."
   (claude-code-ide-mcp-server-with-session-context nil
-    (let ((directory (plist-get args :directory))
-          (buffer-name (plist-get args :buffer_name))
-          (initial-message (plist-get args :initial_message)))
-      (unless directory
-        (error "directory parameter is required"))
-      (claude-code-ide-instance--spawn directory buffer-name initial-message))))
+    (unless directory
+      (error "directory parameter is required"))
+    (claude-code-ide-instance--spawn directory buffer_name initial_message)))
 
-(defun claude-code-ide-mcp-send-to-instance (args)
+(defun claude-code-ide-mcp-send-to-instance (buffer_name message)
   "MCP tool handler for sending a message to an instance.
-ARGS should contain:
-  :buffer_name - Name of the instance buffer (required)
-  :message - Message to send (required)"
+BUFFER_NAME is the name of the instance buffer.
+MESSAGE is the message to send."
   (claude-code-ide-mcp-server-with-session-context nil
-    (let ((buffer-name (plist-get args :buffer_name))
-          (message (plist-get args :message)))
-      (unless buffer-name
-        (error "buffer_name parameter is required"))
-      (unless message
-        (error "message parameter is required"))
-      (claude-code-ide-instance--send-message buffer-name message))))
+    (unless buffer_name
+      (error "buffer_name parameter is required"))
+    (unless message
+      (error "message parameter is required"))
+    (claude-code-ide-instance--send-message buffer_name message)))
 
 (defun claude-code-ide-mcp-list-instances (&optional _args)
   "MCP tool handler for listing all running instances.
@@ -221,15 +214,13 @@ ARGS is ignored."
   (claude-code-ide-mcp-server-with-session-context nil
     (claude-code-ide-instance--list)))
 
-(defun claude-code-ide-mcp-kill-instance (args)
+(defun claude-code-ide-mcp-kill-instance (buffer_name)
   "MCP tool handler for killing an instance.
-ARGS should contain:
-  :buffer_name - Name of the instance buffer to kill (required)"
+BUFFER_NAME is the name of the instance buffer to kill."
   (claude-code-ide-mcp-server-with-session-context nil
-    (let ((buffer-name (plist-get args :buffer_name)))
-      (unless buffer-name
-        (error "buffer_name parameter is required"))
-      (claude-code-ide-instance--kill buffer-name))))
+    (unless buffer_name
+      (error "buffer_name parameter is required"))
+    (claude-code-ide-instance--kill buffer_name)))
 
 ;;; Tool Registration
 
