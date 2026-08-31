@@ -529,6 +529,74 @@ Available argument types: =string=, =number=, =integer=, =boolean=, =array=, =ob
 
 The =claude-code-ide-mcp-server-with-session-context= macro ensures your tool executes in the correct project context.
 
+* pi Support
+
+Instead of the Claude Code CLI, this package can launch the [[https://github.com/badlogic/pi-mono/][pi coding agent]],
+giving pi sessions the same Emacs MCP tool surface (xref, project, imenu,
+buffers, tree-sitter, eval, instance management, etc.).
+
+** Setup
+
+#+begin_src elisp
+;; Launch pi instead of Claude Code
+(setq claude-code-ide-agent 'pi)
+
+;; Optional: custom pi executable location
+(setq claude-code-ide-pi-cli-path "pi")
+#+end_src
+
+With =claude-code-ide-enable-mcp-server= set to non-nil (required for the
+Emacs tools), install the pi MCP adapter once:
+
+#+begin_src sh
+pi install npm:pi-mcp-adapter
+#+end_src
+
+The adapter registers pi's =--mcp-config= flag; without it, starting a pi
+session with the MCP server enabled fails with an install hint. With
+=claude-code-ide-enable-mcp-server= nil, pi works without the adapter.
+
+** What works
+
+| Feature | Claude Code | pi |
+|---------+-------------+----|
+| Terminal session (vterm/eat/ghostel) | yes | yes |
+| Continue / resume flags (=-c= / =-r=) | yes | yes |
+| Emacs context system prompt | yes | yes |
+| MCP tools server (xref, project, buffers, etc.) | yes | yes, via pi-mcp-adapter |
+| IDE WebSocket protocol (ediff via IDE, selection tracking, diagnostics push) | yes | no |
+
+The Claude-IDE-protocol features rely on the Claude Code IDE WebSocket
+connection and are not available with pi; the HTTP MCP tools server covers
+the tool surface instead.
+
+** Direct tools vs. proxy tool
+
+By default pi sees a single =mcp= proxy tool. To register each emacs-tools
+MCP tool as a first-class pi tool:
+
+#+begin_src elisp
+(setq claude-code-ide-pi-direct-tools t)
+#+end_src
+
+Note: the adapter registers direct tools from a metadata cache; on the first
+session after adding a server the cache is missing and tools fall back to
+proxy mode until it populates. Because the MCP server port changes on every
+Emacs restart by default, direct tools work best with a fixed port:
+
+#+begin_src elisp
+(setq claude-code-ide-mcp-server-port 8765)
+#+end_src
+
+** Notes
+
+- Session buffers are still named =*claude-code[dir]*= regardless of the
+  active agent; MCP session ids use a =pi-<dir>-<ts>= prefix for pi.
+- =claude-code-ide-cli-debug= maps to pi's =--verbose= flag, which only
+  increases startup verbosity.
+- Buffer names, side-window layout, and all window/session commands behave
+  identically for both agents.
+
 * License
 
 This project is licensed under the GNU General Public License v3.0 or later. See the LICENSE file for details.

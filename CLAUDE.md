@@ -13,6 +13,13 @@ This package integrates Claude Code CLI with Emacs via WebSocket and the Model C
 - `claude-code-ide-mcp.el` - WebSocket server, JSON-RPC handling, session state
 - `claude-code-ide-mcp-handlers.el` - MCP tool implementations (file ops, ediff, diagnostics)
 
+**Agent backends:** `claude-code-ide-agent` selects the coding agent CLI to
+launch: `claude` (Claude Code CLI, default) or `pi` (the pi coding agent).
+For pi, the WebSocket IDE server is skipped (pi has no client for it), MCP
+tools are wired via a pi-mcp-adapter config file passed as `--mcp-config`,
+and the adapter must be installed (`pi install npm:pi-mcp-adapter`) when the
+MCP server is enabled. See the "pi Support" section in README.org.
+
 **Support Files:**
 - `claude-code-ide-mcp-server.el` - HTTP-based MCP tools server framework
 - `claude-code-ide-mcp-http-server.el` - HTTP transport implementation
