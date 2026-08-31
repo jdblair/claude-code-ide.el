@@ -52,9 +52,13 @@
 (declare-function claude-code-ide-mcp-session-last-buffer "claude-code-ide-mcp" (session))
 (declare-function claude-code-ide-mcp--get-current-session "claude-code-ide-mcp" ())
 (declare-function claude-code-ide--get-working-directory "claude-code-ide" ())
+(declare-function claude-code-ide--agent-cli-path "claude-code-ide" ())
+(declare-function claude-code-ide--agent-display-name "claude-code-ide" ())
 
 ;; Declare variables
 (defvar claude-code-ide-cli-path)
+(defvar claude-code-ide-agent)
+(defvar claude-code-ide-pi-cli-path)
 (defvar claude-code-ide-debug)
 (defvar claude-code-ide-window-side)
 (defvar claude-code-ide-window-width)
@@ -141,20 +145,22 @@ Otherwise, if multiple sessions exist, prompt for selection."
   (claude-code-ide-toggle))
 
 (defun claude-code-ide-show-version-info ()
-  "Show detailed version information for Claude Code CLI."
+  "Show detailed version information for the active agent CLI."
   (interactive)
-  (if (claude-code-ide--ensure-cli)
-      (let ((version-output
-             (with-temp-buffer
-               (call-process claude-code-ide-cli-path nil t nil "--version")
-               (buffer-string))))
-        (with-output-to-temp-buffer "*Claude Code Version*"
-          (princ "Claude Code CLI Version Information\n")
-          (princ "===================================\n\n")
-          (princ version-output)
-          (princ "\n\nExecutable path: ")
-          (princ (executable-find claude-code-ide-cli-path))))
-    (user-error "Claude Code CLI not available")))
+  (let ((cli-path (claude-code-ide--agent-cli-path))
+        (agent-name (claude-code-ide--agent-display-name)))
+    (if (claude-code-ide--ensure-cli)
+        (let ((version-output
+               (with-temp-buffer
+                 (call-process cli-path nil t nil "--version")
+                 (buffer-string))))
+          (with-output-to-temp-buffer "*Claude Code Version*"
+            (princ (format "%s Version Information\n" agent-name))
+            (princ "===================================\n\n")
+            (princ version-output)
+            (princ "\n\nExecutable path: ")
+            (princ (executable-find cli-path))))
+      (user-error "%s not available" agent-name))))
 
 (defun claude-code-ide-show-mcp-sessions ()
   "Show information about active MCP sessions."
@@ -223,10 +229,15 @@ Otherwise, if multiple sessions exist, prompt for selection."
   (claude-code-ide-log "Window height set to %d" height))
 
 (transient-define-suffix claude-code-ide--set-cli-path (path)
-  "Set CLI path."
+  "Set CLI path for the active agent backend."
   :description "Set CLI path"
-  (interactive (list (read-file-name "Claude CLI path: " nil claude-code-ide-cli-path t)))
-  (setq claude-code-ide-cli-path path)
+  (interactive
+   (list (read-file-name
+          (format "%s path: " (claude-code-ide--agent-display-name))
+          nil (claude-code-ide--agent-cli-path) t)))
+  (if (eq claude-code-ide-agent 'pi)
+      (setq claude-code-ide-pi-cli-path path)
+    (setq claude-code-ide-cli-path path))
   (claude-code-ide-log "CLI path set to %s" path))
 
 (transient-define-suffix claude-code-ide--set-cli-extra-flags (flags)
@@ -306,6 +317,8 @@ Otherwise, if multiple sessions exist, prompt for selection."
   (customize-save-variable 'claude-code-ide-switch-tab-on-ediff claude-code-ide-switch-tab-on-ediff)
   (customize-save-variable 'claude-code-ide-use-side-window claude-code-ide-use-side-window)
   (customize-save-variable 'claude-code-ide-cli-path claude-code-ide-cli-path)
+  (customize-save-variable 'claude-code-ide-agent claude-code-ide-agent)
+  (customize-save-variable 'claude-code-ide-pi-cli-path claude-code-ide-pi-cli-path)
   (customize-save-variable 'claude-code-ide-cli-extra-flags claude-code-ide-cli-extra-flags)
   (customize-save-variable 'claude-code-ide-system-prompt claude-code-ide-system-prompt)
   (claude-code-ide-log "Configuration saved to custom file"))

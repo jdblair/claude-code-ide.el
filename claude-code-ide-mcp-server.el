@@ -35,6 +35,7 @@
 
 (require 'cl-lib)
 (require 'json)
+(require 'sha1)
 (require 'claude-code-ide-debug)
 
 ;; Forward declarations
@@ -61,6 +62,16 @@ Claude with access to configured Emacs functions."
 If nil, a random available port will be selected automatically."
   :type '(choice (const :tag "Auto-select" nil)
                  (integer :tag "Fixed port"))
+  :group 'claude-code-ide-mcp-server)
+
+(defcustom claude-code-ide-pi-direct-tools nil
+  "Register each emacs-tools MCP tool as a first-class pi tool.
+Requires pi-mcp-adapter.  Works best with a fixed
+`claude-code-ide-mcp-server-port': the adapter registers direct
+tools from a metadata cache, and with a changing port the cache
+misses on the first session after each Emacs restart, falling back
+to the single `mcp' proxy tool until the cache is populated."
+  :type 'boolean
   :group 'claude-code-ide-mcp-server)
 
 (defcustom claude-code-ide-mcp-server-tools nil
@@ -281,6 +292,44 @@ Returns an alist suitable for JSON encoding."
            (config `((type . "http")
                      (url . ,url))))
       `((mcpServers . ((emacs-tools . ,config)))))))
+
+(defun claude-code-ide-mcp-server-config-file-path (&optional directory)
+  "Return the deterministic pi MCP config file path for DIRECTORY.
+DIRECTORY defaults to `default-directory'.  The name is derived
+from a hash of the directory, so only one session per directory
+can exist and files from crashed Emacs sessions are overwritten
+on the next start."
+  (expand-file-name
+   (format "claude-code-ide-mcp-%s.json"
+           (sha1 (expand-file-name (or directory default-directory))))
+   temporary-file-directory))
+
+(defun claude-code-ide-mcp-server-write-config-file (&optional session-id directory)
+  "Write a pi-mcp-adapter config file for the MCP tools server.
+If SESSION-ID is provided, it is included in the URL path.
+DIRECTORY (default `default-directory') determines the file name.
+Returns the file path, or nil when the tools server is not running."
+  (when-let* ((config (claude-code-ide-mcp-server-get-config session-id))
+              (url (alist-get 'url
+                              (alist-get 'emacs-tools
+                                         (alist-get 'mcpServers config)))))
+    (let* ((options `((url . ,url)
+                      (lifecycle . "eager")
+                      ,@(when claude-code-ide-pi-direct-tools
+                          '((directTools . t)))))
+           (file (claude-code-ide-mcp-server-config-file-path directory)))
+      (with-temp-file file
+        (insert (json-encode `((mcpServers . ((emacs-tools . ,options)))))))
+      (claude-code-ide-debug "Wrote pi MCP config file %s" file)
+      file)))
+
+(defun claude-code-ide-mcp-server-delete-config-file (&optional directory)
+  "Delete the pi MCP config file for DIRECTORY, if it exists.
+DIRECTORY defaults to `default-directory'."
+  (let ((file (claude-code-ide-mcp-server-config-file-path directory)))
+    (when (file-exists-p file)
+      (delete-file file)
+      (claude-code-ide-debug "Deleted pi MCP config file %s" file))))
 
 (defun claude-code-ide-mcp-server-get-tool-names (&optional prefix)
   "Get a list of all registered MCP tool names.

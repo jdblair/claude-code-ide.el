@@ -110,6 +110,21 @@
   :type 'string
   :group 'claude-code-ide)
 
+(defcustom claude-code-ide-agent 'claude
+  "Which coding agent CLI to launch.
+`claude' uses the Claude Code CLI; `pi' uses the pi coding agent.
+Pi MCP support requires the pi-mcp-adapter package:
+pi install npm:pi-mcp-adapter.  With `claude-code-ide-enable-mcp-server'
+nil, pi works without the adapter."
+  :type '(choice (const :tag "Claude Code" claude)
+                 (const :tag "pi" pi))
+  :group 'claude-code-ide)
+
+(defcustom claude-code-ide-pi-cli-path "pi"
+  "Path to the pi CLI executable."
+  :type 'string
+  :group 'claude-code-ide)
+
 (defcustom claude-code-ide-buffer-name-function #'claude-code-ide--default-buffer-name
   "Function to generate buffer names for Claude Code sessions.
 The function is called with one argument, the working directory,
@@ -804,6 +819,8 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
             (advice-remove 'vterm--filter #'claude-code-ide--vterm-smart-renderer))
           ;; Stop MCP server for this project directory
           (claude-code-ide-mcp-stop-session directory)
+          ;; Delete the pi MCP config file for this directory
+          (claude-code-ide-mcp-server-delete-config-file directory)
           ;; Notify MCP tools server about session end with session ID
           (let ((session-id (gethash directory claude-code-ide--session-ids)))
             (claude-code-ide-mcp-server-session-ended session-id)
@@ -823,10 +840,23 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
 
 ;;; CLI Detection
 
+(defun claude-code-ide--agent-cli-path ()
+  "Return the CLI path for the active agent backend.
+See `claude-code-ide-agent'."
+  (if (eq claude-code-ide-agent 'pi)
+      claude-code-ide-pi-cli-path
+    claude-code-ide-cli-path))
+
+(defun claude-code-ide--agent-display-name ()
+  "Return a human-readable name for the active agent backend."
+  (if (eq claude-code-ide-agent 'pi)
+      "pi CLI"
+    "Claude Code CLI"))
+
 (defun claude-code-ide--detect-cli ()
-  "Detect if Claude Code CLI is available."
+  "Detect if the active agent CLI is available."
   (let ((available (condition-case nil
-                       (eq (call-process claude-code-ide-cli-path nil nil nil "--version") 0)
+                       (eq (call-process (claude-code-ide--agent-cli-path) nil nil nil "--version") 0)
                      (error nil))))
     (setq claude-code-ide--cli-available available)))
 
@@ -859,6 +889,45 @@ If the window is not visible, it will be shown in a side window."
             (setf (claude-code-ide-mcp-session-original-tab session) (tab-bar--current-tab))))
         (claude-code-ide-debug "Claude Code window shown")))))
 
+(defun claude-code-ide--combined-system-prompt ()
+  "Return the Emacs context prompt combined with the user prompt.
+The Emacs context prompt is always included; the value of
+`claude-code-ide-system-prompt' is appended when set."
+  (let ((emacs-prompt "IMPORTANT: Connected to Emacs via claude-code-ide.el integration. Emacs uses mixed coordinates: Lines: 1-based (line 1 = first line), Columns: 0-based (column 0 = first column). Example: First character in file is at line 1, column 0. Available: xref (LSP), tree-sitter, imenu, project.el, flycheck/flymake diagnostics. Context-aware with automatic project/file/selection tracking."))
+    (if claude-code-ide-system-prompt
+        (concat emacs-prompt "\n\n" claude-code-ide-system-prompt)
+      emacs-prompt)))
+
+(defvar claude-code-ide--pi-adapter-checked nil
+  "Whether pi-mcp-adapter availability was probed this Emacs session.")
+
+(defvar claude-code-ide--pi-adapter-available nil
+  "Cached result of the pi-mcp-adapter availability probe.")
+
+(defun claude-code-ide--pi-adapter-available-p ()
+  "Return non-nil if the pi-mcp-adapter package is installed for pi.
+Runs the pi CLI's `list' command once per Emacs session and caches
+the result."
+  (unless claude-code-ide--pi-adapter-checked
+    (setq claude-code-ide--pi-adapter-checked t
+          claude-code-ide--pi-adapter-available
+          (condition-case nil
+              (with-temp-buffer
+                (and (eq (call-process claude-code-ide-pi-cli-path nil t nil "list") 0)
+                     (progn (goto-char (point-min))
+                            (re-search-forward "pi-mcp-adapter" nil t))))
+            (error nil))))
+  claude-code-ide--pi-adapter-available)
+
+(defun claude-code-ide--ensure-pi-mcp-adapter ()
+  "Signal a user error if pi MCP support is missing.
+The pi-mcp-adapter package registers the `--mcp-config' flag; without
+it pi would fail at startup."
+  (when (and (eq claude-code-ide-agent 'pi)
+             claude-code-ide-enable-mcp-server
+             (not (claude-code-ide--pi-adapter-available-p)))
+    (user-error "pi-mcp-adapter is not installed.  Run `pi install npm:pi-mcp-adapter', or set `claude-code-ide-enable-mcp-server' to nil")))
+
 (defun claude-code-ide--build-claude-command (&optional continue resume session-id)
   "Build the Claude command with optional flags.
 If CONTINUE is non-nil, add the -c flag.
@@ -878,16 +947,9 @@ Additional flags from `claude-code-ide-cli-extra-flags' are also included."
     (when continue
       (setq claude-cmd (concat claude-cmd " -c")))
     ;; Add append-system-prompt flag with Emacs context
-    (let ((emacs-prompt "IMPORTANT: Connected to Emacs via claude-code-ide.el integration. Emacs uses mixed coordinates: Lines: 1-based (line 1 = first line), Columns: 0-based (column 0 = first column). Example: First character in file is at line 1, column 0. Available: xref (LSP), tree-sitter, imenu, project.el, flycheck/flymake diagnostics. Context-aware with automatic project/file/selection tracking.")
-          (combined-prompt nil))
-      ;; Always include the Emacs-specific prompt
-      (setq combined-prompt emacs-prompt)
-      ;; Append user's custom prompt if set
-      (when claude-code-ide-system-prompt
-        (setq combined-prompt (concat combined-prompt "\n\n" claude-code-ide-system-prompt)))
-      ;; Add the combined prompt to the command
-      (setq claude-cmd (concat claude-cmd " --append-system-prompt "
-                               (shell-quote-argument combined-prompt))))
+    (setq claude-cmd (concat claude-cmd " --append-system-prompt "
+                             (shell-quote-argument
+                              (claude-code-ide--combined-system-prompt))))
     ;; Add any extra flags
     (when (and claude-code-ide-cli-extra-flags
                (not (string-empty-p claude-code-ide-cli-extra-flags)))
@@ -916,6 +978,65 @@ Additional flags from `claude-code-ide-cli-extra-flags' are also included."
             (when allowed-tools
               (setq claude-cmd (concat claude-cmd " --allowedTools " allowed-tools)))))))
     claude-cmd))
+
+(defun claude-code-ide--build-pi-command (&optional continue resume session-id)
+  "Build the pi command with optional flags.
+If CONTINUE is non-nil, add the -c flag.
+If RESUME is non-nil, add the -r flag.
+If SESSION-ID is provided, it is included in the MCP config URL path.
+If `claude-code-ide-cli-debug' is non-nil, add the --verbose flag.
+The Emacs context prompt is always passed via --append-system-prompt.
+Additional flags from `claude-code-ide-cli-extra-flags' are also included.
+When `claude-code-ide-enable-mcp-server' is non-nil, a pi-mcp-adapter
+config file is written and passed via --mcp-config."
+  (let ((pi-cmd claude-code-ide-pi-cli-path))
+    ;; Add verbose flag if debug is enabled
+    (when claude-code-ide-cli-debug
+      (setq pi-cmd (concat pi-cmd " --verbose")))
+    ;; Add resume flag if requested
+    (when resume
+      (setq pi-cmd (concat pi-cmd " -r")))
+    ;; Add continue flag if requested
+    (when continue
+      (setq pi-cmd (concat pi-cmd " -c")))
+    ;; Add append-system-prompt flag with Emacs context
+    (setq pi-cmd (concat pi-cmd " --append-system-prompt "
+                         (shell-quote-argument
+                          (claude-code-ide--combined-system-prompt))))
+    ;; Add any extra flags
+    (when (and claude-code-ide-cli-extra-flags
+               (not (string-empty-p claude-code-ide-cli-extra-flags)))
+      (setq pi-cmd (concat pi-cmd " " claude-code-ide-cli-extra-flags)))
+    ;; Add MCP tools config file if enabled
+    (when claude-code-ide-enable-mcp-server
+      (claude-code-ide--ensure-pi-mcp-adapter)
+      (when (claude-code-ide-mcp-server-ensure-server)
+        (when-let ((config-file (claude-code-ide-mcp-server-write-config-file session-id)))
+          (setq pi-cmd (concat pi-cmd " --mcp-config "
+                               (shell-quote-argument config-file))))))
+    pi-cmd))
+
+(defun claude-code-ide--build-agent-command (&optional continue resume session-id)
+  "Build the command for the active agent backend.
+Dispatches to the Claude Code or pi command builder based on
+`claude-code-ide-agent'.  CONTINUE, RESUME and SESSION-ID are
+passed through."
+  (if (eq claude-code-ide-agent 'pi)
+      (claude-code-ide--build-pi-command continue resume session-id)
+    (claude-code-ide--build-claude-command continue resume session-id)))
+
+(defun claude-code-ide--build-env-vars (agent port)
+  "Return environment variable strings for a terminal session.
+AGENT is the backend symbol (`claude' or `pi').
+PORT is the WebSocket MCP server port, only used by the Claude
+backend; it may be nil for the pi backend."
+  (if (eq agent 'pi)
+      (list "TERM_PROGRAM=emacs")
+    (append (list (format "CLAUDE_CODE_SSE_PORT=%d" port)
+                  "TERM_PROGRAM=emacs"
+                  "FORCE_CODE_TERMINAL=true")
+            (when claude-code-ide-no-flicker
+              (list "CLAUDE_CODE_NO_FLICKER=1")))))
 
 (defun claude-code-ide--terminal-position-keeper (window-list)
   "Maintain stable terminal view position across window switches.
@@ -982,17 +1103,15 @@ Returns a cons cell of (buffer . process) on success.
 Signals an error if terminal fails to initialize."
   ;; Ensure terminal backend is available before proceeding
   (claude-code-ide--terminal-ensure-backend)
-  (let* ((claude-cmd (claude-code-ide--build-claude-command continue resume session-id))
-         (default-directory working-dir)
-         (env-vars (append (list (format "CLAUDE_CODE_SSE_PORT=%d" port)
-                                 "TERM_PROGRAM=emacs"
-                                 "FORCE_CODE_TERMINAL=true")
-                           (when claude-code-ide-no-flicker
-                             (list "CLAUDE_CODE_NO_FLICKER=1")))))
+  (let* ((default-directory working-dir)
+         (claude-cmd (claude-code-ide--build-agent-command continue resume session-id))
+         (env-vars (claude-code-ide--build-env-vars claude-code-ide-agent port)))
     ;; Log the command for debugging
-    (claude-code-ide-debug "Starting Claude with command: %s" claude-cmd)
+    (claude-code-ide-debug "Starting %s with command: %s"
+                           (claude-code-ide--agent-display-name) claude-cmd)
     (claude-code-ide-debug "Working directory: %s" working-dir)
-    (claude-code-ide-debug "Environment: CLAUDE_CODE_SSE_PORT=%d" port)
+    (when port
+      (claude-code-ide-debug "Environment: CLAUDE_CODE_SSE_PORT=%d" port))
     (claude-code-ide-debug "Session ID: %s" session-id)
     (claude-code-ide-debug "Terminal backend: %s" claude-code-ide-terminal-backend)
 
@@ -1102,7 +1221,8 @@ This function handles:
 - New session creation with MCP server setup
 - Process and buffer lifecycle management"
   (unless (claude-code-ide--ensure-cli)
-    (user-error "Claude Code CLI not available.  Please install it and ensure it's in PATH"))
+    (user-error "%s not available.  Please install it and ensure it's in PATH"
+                (claude-code-ide--agent-display-name)))
 
   ;; Clean up any dead processes first
   (claude-code-ide--cleanup-dead-processes)
@@ -1121,13 +1241,19 @@ This function handles:
       (claude-code-ide--terminal-ensure-backend)
       ;; Start MCP server with project directory
       (let ((port nil)
-            (session-id (format "claude-%s-%s"
+            (session-id (format "%s-%s-%s"
+                                (if (eq claude-code-ide-agent 'pi) "pi" "claude")
                                 (file-name-nondirectory (directory-file-name working-dir))
                                 (format-time-string "%Y%m%d-%H%M%S"))))
         (condition-case err
             (progn
-              ;; Start MCP server
-              (setq port (claude-code-ide-mcp-start working-dir))
+              ;; Verify pi MCP prerequisites before starting anything
+              (claude-code-ide--ensure-pi-mcp-adapter)
+              ;; Start the WebSocket IDE server for the Claude backend only;
+              ;; pi has no client for it and uses the HTTP tools server
+              ;; directly via the pi-mcp-adapter config file.
+              (when (eq claude-code-ide-agent 'claude)
+                (setq port (claude-code-ide-mcp-start working-dir)))
               ;; Create new terminal session
               (let* ((buffer-and-process (claude-code-ide--create-terminal-session
                                           buffer-name working-dir port continue resume session-id))
@@ -1187,21 +1313,26 @@ This function handles:
                 ;; Displaying the dead buffer would surface only as a cryptic
                 ;; wrong-type-argument, so fail with a real explanation.
                 (unless (and (buffer-live-p buffer) (process-live-p process))
-                  (error "Claude Code exited immediately after startup.  Verify that `claude-code-ide-cli-path' (%s) is executable in the %s backend's environment"
-                         claude-code-ide-cli-path claude-code-ide-terminal-backend))
+                  (error "%s exited immediately after startup.  Verify that the CLI path (%s) is executable in the %s backend's environment"
+                         (claude-code-ide--agent-display-name)
+                         (claude-code-ide--agent-cli-path)
+                         claude-code-ide-terminal-backend))
                 ;; Display the buffer in a side window
                 (claude-code-ide--display-buffer-in-side-window buffer)
-                (claude-code-ide-log "Claude Code %sstarted in %s with MCP on port %d%s"
+                (claude-code-ide-log "%s %sstarted in %s%s%s"
+                                     (claude-code-ide--agent-display-name)
                                      (cond (continue "continued and ")
                                            (resume "resumed and ")
                                            (t ""))
                                      (file-name-nondirectory (directory-file-name working-dir))
-                                     port
-                                     (if claude-code-ide-cli-debug " (debug mode enabled)" ""))))
+                                     (if port (format " with MCP on port %d" port) "")
+                                     (if claude-code-ide-cli-debug " (verbose flag enabled)" ""))))
           (error
-           ;; Terminal session creation failed - clean up MCP server
+           ;; Terminal session creation failed - clean up MCP server and
+           ;; any config file already written for this directory
            (when port
              (claude-code-ide-mcp-stop-session working-dir))
+           (claude-code-ide-mcp-server-delete-config-file working-dir)
            ;; Re-signal the error with improved message
            (signal (car err) (cdr err))))))))
 
@@ -1229,16 +1360,18 @@ conversation in the current directory."
 
 ;;;###autoload
 (defun claude-code-ide-check-status ()
-  "Check Claude Code CLI status."
+  "Check the active agent CLI status."
   (interactive)
   (claude-code-ide--detect-cli)
   (if claude-code-ide--cli-available
       (let ((version-output
              (with-temp-buffer
-               (call-process claude-code-ide-cli-path nil t nil "--version")
+               (call-process (claude-code-ide--agent-cli-path) nil t nil "--version")
                (buffer-string))))
-        (claude-code-ide-log "Claude Code CLI version: %s" (string-trim version-output)))
-    (claude-code-ide-log "Claude Code is not installed.")))
+        (claude-code-ide-log "%s version: %s"
+                             (claude-code-ide--agent-display-name)
+                             (string-trim version-output)))
+    (claude-code-ide-log "%s is not installed." (claude-code-ide--agent-display-name))))
 
 ;;;###autoload
 (defun claude-code-ide-stop ()
