@@ -1280,6 +1280,19 @@ with an explanatory error rather than operating on the dead buffer."
            ,@body)
        (delete-file ,file-var))))
 
+(defmacro claude-code-ide-mcp-tests--with-session-context (&rest body)
+  "Register a temporary MCP tools session context and execute BODY.
+Modular mcp-tools.d functions require a registered session; this
+helper registers one for the current directory and removes it after
+BODY runs."
+  (declare (indent 0))
+  `(let ((session-id "test-session-context"))
+     (claude-code-ide-mcp-server-register-session
+      session-id default-directory (current-buffer))
+     (let ((claude-code-ide-mcp-server--current-session-id session-id))
+       (unwind-protect (progn ,@body)
+         (claude-code-ide-mcp-server-unregister-session session-id)))))
+
 (defmacro claude-code-ide-mcp-tests--with-temp-buffer (content &rest body)
   "Create a temporary buffer with CONTENT and execute BODY."
   (declare (indent 1))
@@ -1322,85 +1335,62 @@ with an explanatory error rather than operating on the dead buffer."
 
 (ert-deftest claude-code-ide-test-mcp-goto-location ()
   "Test the gotoLocation tool implementation."
-  ;; Test basic jump to line
-  (claude-code-ide-mcp-tests--with-temp-file test-file "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
-                                             (let ((result (claude-code-ide-mcp-handle-goto-location
-                                                            `((file_path . ,test-file)
-                                                              (line . 3)))))
-                                               ;; Handler returns success message
-                                               (should (listp result))
-                                               (let ((first-item (car result)))
-                                                 (should (equal (alist-get 'type first-item) "text"))
-                                                 (should (string-match-p "Jumped to.*:3" (alist-get 'text first-item))))
-                                               ;; Verify we're on line 3
-                                               (should (= (line-number-at-pos) 3))
-                                               (kill-buffer)))
+  (require 'claude-code-ide-tool-buffer-management)
+  (claude-code-ide-mcp-tests--with-session-context
+    ;; Test basic jump to line
+    (claude-code-ide-mcp-tests--with-temp-file test-file "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
+      (let ((result (claude-code-ide-mcp-goto-location test-file 3)))
+        ;; Tool returns a success message string
+        (should (stringp result))
+        (should (string-match-p "Jumped to.*:3" result))
+        ;; Verify point is on line 3 in the visiting buffer
+        (with-current-buffer (find-buffer-visiting test-file)
+          (should (= (line-number-at-pos) 3)))
+        (kill-buffer (find-buffer-visiting test-file))))
 
-  ;; Test jump to line and column
-  (claude-code-ide-mcp-tests--with-temp-file test-file "abcdefgh\nijklmnop\nqrstuvwx"
-                                             (let ((result (claude-code-ide-mcp-handle-goto-location
-                                                            `((file_path . ,test-file)
-                                                              (line . 2)
-                                                              (column . 5)))))
-                                               (should (listp result))
-                                               ;; Verify position
-                                               (should (= (line-number-at-pos) 2))
-                                               (should (= (current-column) 5))
-                                               (kill-buffer)))
+    ;; Test jump to line and column
+    (claude-code-ide-mcp-tests--with-temp-file test-file "abcdefgh\nijklmnop\nqrstuvwx"
+      (let ((result (claude-code-ide-mcp-goto-location test-file 2 5)))
+        (should (stringp result))
+        (with-current-buffer (find-buffer-visiting test-file)
+          (should (= (line-number-at-pos) 2))
+          (should (= (current-column) 5)))
+        (kill-buffer (find-buffer-visiting test-file))))
 
-  ;; Test with highlight option (just verify it doesn't error)
-  (claude-code-ide-mcp-tests--with-temp-file test-file "Line 1\nLine 2\nLine 3"
-                                             (let ((result (claude-code-ide-mcp-handle-goto-location
-                                                            `((file_path . ,test-file)
-                                                              (line . 2)
-                                                              (highlight . t)))))
-                                               (should (listp result))
-                                               (should (= (line-number-at-pos) 2))
-                                               (kill-buffer)))
-
-  ;; Test missing file_path parameter
-  (should-error (claude-code-ide-mcp-handle-goto-location '((line . 1)))
-                :type 'mcp-error)
-
-  ;; Test missing line parameter
-  (should-error (claude-code-ide-mcp-handle-goto-location '((file_path . "/tmp/test.txt")))
-                :type 'mcp-error))
+    ;; Test with highlight option (just verify it doesn't error)
+    (claude-code-ide-mcp-tests--with-temp-file test-file "Line 1\nLine 2\nLine 3"
+      (let ((result (claude-code-ide-mcp-goto-location test-file 2 nil t)))
+        (should (stringp result))
+        (with-current-buffer (find-buffer-visiting test-file)
+          (should (= (line-number-at-pos) 2)))
+        (kill-buffer (find-buffer-visiting test-file))))))
 
 (ert-deftest claude-code-ide-test-mcp-reload-buffer ()
   "Test the reloadBuffer tool implementation."
-  ;; Test reloading a buffer that has been modified externally
-  (claude-code-ide-mcp-tests--with-temp-file test-file "Original content"
-                                             ;; Open the file in a buffer
-                                             (find-file test-file)
-                                             (should (string= (buffer-string) "Original content"))
-                                             ;; Modify the file externally (simulating Edit/Write tool)
-                                             (with-temp-file test-file
-                                               (insert "Modified content"))
-                                             ;; Buffer still has old content
-                                             (should (string= (buffer-string) "Original content"))
-                                             ;; Reload the buffer
-                                             (let ((result (claude-code-ide-mcp-handle-reload-buffer
-                                                            `((file_path . ,test-file)))))
-                                               (should (listp result))
-                                               (let ((first-item (car result)))
-                                                 (should (equal (alist-get 'type first-item) "text"))
-                                                 (should (string-match-p "Buffer reloaded from disk" (alist-get 'text first-item))))
-                                               ;; Buffer should now have new content
-                                               (should (string= (buffer-string) "Modified content")))
-                                             (kill-buffer)))
-
-;; Test reloading a file that's not currently open
-(claude-code-ide-mcp-tests--with-temp-file test-file "Some content"
-                                           (let ((result (claude-code-ide-mcp-handle-reload-buffer
-                                                          `((file_path . ,test-file)))))
-                                             (should (listp result))
-                                             (let ((first-item (car result)))
-                                               (should (equal (alist-get 'type first-item) "text"))
-                                               (should (string-match-p "Buffer not open" (alist-get 'text first-item))))))
-
-;; Test missing file_path parameter
-(should-error (claude-code-ide-mcp-handle-reload-buffer '())
-              :type 'mcp-error)
+  (require 'claude-code-ide-tool-buffer-management)
+  (claude-code-ide-mcp-tests--with-session-context
+    ;; Test reloading a buffer that has been modified externally
+    (claude-code-ide-mcp-tests--with-temp-file test-file "Original content"
+      ;; Open the file in a buffer
+      (find-file test-file)
+      (should (string= (buffer-string) "Original content"))
+      ;; Modify the file externally (simulating Edit/Write tool)
+      (with-temp-file test-file
+        (insert "Modified content"))
+      ;; Buffer still has old content
+      (should (string= (buffer-string) "Original content"))
+      ;; Reload the buffer
+      (let ((result (claude-code-ide-mcp-reload-buffer test-file)))
+        (should (stringp result))
+        (should (string-match-p "Buffer reloaded from disk" result))
+        ;; Buffer should now have new content
+        (should (string= (buffer-string) "Modified content")))
+      (kill-buffer (find-buffer-visiting test-file)))
+    ;; Test reloading a file that's not currently open
+    (claude-code-ide-mcp-tests--with-temp-file test-file "Some content"
+      (let ((result (claude-code-ide-mcp-reload-buffer test-file)))
+        (should (stringp result))
+        (should (string-match-p "Buffer not open" result))))))
 
 (ert-deftest claude-code-ide-test-mcp-get-current-selection ()
   "Test the selection payload builder."
