@@ -1133,6 +1133,250 @@ with an explanatory error rather than operating on the dead buffer."
       ;; The command should contain the escaped version (shell-quote-argument escapes quotes and apostrophes)
       (should (string-match-p "You\\\\'re\\\\ a\\\\ \\\\\"helpful\\\\\"\\\\ assistant\\\\!" cmd)))))
 
+;;; Pi backend tests
+
+(defun claude-code-ide-tests--pi-mock-config (&optional session-id)
+  "Return a fixed MCP tools config alist for tests.
+If SESSION-ID is provided, it is included in the URL path."
+  (let ((url (format "http://localhost:1234%s"
+                     (if session-id (format "/mcp/%s" session-id) "/mcp"))))
+    `((mcpServers . ((emacs-tools . ((type . "http")
+                                     (url . ,url))))))))
+
+(ert-deftest claude-code-ide-test-pi-command-basic ()
+  "Test basic pi command construction."
+  (let ((claude-code-ide-agent 'pi)
+        (claude-code-ide-pi-cli-path "pi")
+        (claude-code-ide-cli-debug nil)
+        (claude-code-ide-cli-extra-flags "")
+        (claude-code-ide-system-prompt nil)
+        (claude-code-ide-enable-mcp-server nil))
+    (let ((cmd (claude-code-ide--build-pi-command)))
+      (should (string-prefix-p "pi " cmd))
+      (should (string-match-p "--append-system-prompt" cmd))
+      (should (or (string-match-p "Connected to Emacs" cmd)
+                  (string-match-p "Connected\\\\ to\\\\ Emacs" cmd)))
+      (should-not (string-match-p "--mcp-config" cmd))
+      (should-not (string-match-p "--verbose" cmd)))))
+
+(ert-deftest claude-code-ide-test-pi-command-flags ()
+  "Test pi command continue/resume/verbose/extra-flag construction."
+  (let ((claude-code-ide-agent 'pi)
+        (claude-code-ide-pi-cli-path "pi")
+        (claude-code-ide-system-prompt nil)
+        (claude-code-ide-enable-mcp-server nil))
+    (let ((claude-code-ide-cli-debug nil)
+          (claude-code-ide-cli-extra-flags ""))
+      (should (string-match-p " -c" (claude-code-ide--build-pi-command t)))
+      (should (string-match-p " -r" (claude-code-ide--build-pi-command nil t))))
+    (let ((claude-code-ide-cli-debug t)
+          (claude-code-ide-cli-extra-flags ""))
+      (should (string-match-p " --verbose" (claude-code-ide--build-pi-command))))
+    (let ((claude-code-ide-cli-debug nil)
+          (claude-code-ide-cli-extra-flags "--model foo"))
+      (should (string-match-p " --model foo" (claude-code-ide--build-pi-command))))))
+
+(ert-deftest claude-code-ide-test-pi-command-user-prompt ()
+  "Test pi command includes the user system prompt."
+  (let ((claude-code-ide-agent 'pi)
+        (claude-code-ide-pi-cli-path "pi")
+        (claude-code-ide-cli-debug nil)
+        (claude-code-ide-cli-extra-flags "")
+        (claude-code-ide-system-prompt "You are a helpful assistant")
+        (claude-code-ide-enable-mcp-server nil))
+    (let ((cmd (claude-code-ide--build-pi-command)))
+      (should (or (string-match-p "You are a helpful assistant" cmd)
+                  (string-match-p "You\\\\ are\\\\ a\\\\ helpful\\\\ assistant" cmd))))))
+
+(ert-deftest claude-code-ide-test-pi-command-mcp-config ()
+  "Test pi command includes --mcp-config when the MCP server is enabled."
+  (let ((claude-code-ide-agent 'pi)
+        (claude-code-ide-pi-cli-path "pi")
+        (claude-code-ide-cli-debug nil)
+        (claude-code-ide-cli-extra-flags "")
+        (claude-code-ide-system-prompt nil)
+        (claude-code-ide-enable-mcp-server t)
+        (claude-code-ide--pi-adapter-checked t)
+        (claude-code-ide--pi-adapter-available t))
+    (cl-letf (((symbol-function 'claude-code-ide-mcp-server-ensure-server)
+               (lambda () 1234))
+              ((symbol-function 'claude-code-ide-mcp-server-get-config)
+               #'claude-code-ide-tests--pi-mock-config))
+      (let* ((cmd (claude-code-ide--build-pi-command nil nil "test-session"))
+             (config-file (claude-code-ide-mcp-server-config-file-path)))
+        (unwind-protect
+            (progn
+              (should (string-match-p "--mcp-config" cmd))
+              (should (string-match-p (regexp-quote config-file) cmd))
+              ;; Config file was written with the session URL
+              (should (file-exists-p config-file))
+              (should (string-match-p "test-session"
+                                      (with-temp-buffer
+                                        (insert-file-contents config-file)
+                                        (buffer-string)))))
+          (claude-code-ide-mcp-server-delete-config-file))))
+    ;; MCP disabled: no --mcp-config flag
+    (let ((claude-code-ide-enable-mcp-server nil))
+      (should-not (string-match-p "--mcp-config"
+                                  (claude-code-ide--build-pi-command))))))
+
+(ert-deftest claude-code-ide-test-pi-command-parse-roundtrip ()
+  "Test the pi command survives shell parsing for eat/ghostel backends."
+  (let ((claude-code-ide-agent 'pi)
+        (claude-code-ide-pi-cli-path "pi")
+        (claude-code-ide-cli-debug nil)
+        (claude-code-ide-cli-extra-flags "")
+        (claude-code-ide-system-prompt nil)
+        (claude-code-ide-enable-mcp-server t)
+        (claude-code-ide--pi-adapter-checked t)
+        (claude-code-ide--pi-adapter-available t))
+    (cl-letf (((symbol-function 'claude-code-ide-mcp-server-ensure-server)
+               (lambda () 1234))
+              ((symbol-function 'claude-code-ide-mcp-server-get-config)
+               #'claude-code-ide-tests--pi-mock-config))
+      (let* ((cmd (claude-code-ide--build-pi-command nil nil "test-session"))
+             (parts (claude-code-ide--parse-command-string cmd)))
+        (unwind-protect
+            (progn
+              (should (string= (car parts) "pi"))
+              (should (member "--append-system-prompt" (cdr parts)))
+              ;; The unquoted prompt text survives the round trip
+              (should (member (claude-code-ide--combined-system-prompt)
+                              (cdr parts)))
+              (should (member "--mcp-config" (cdr parts)))
+              (should (member (claude-code-ide-mcp-server-config-file-path)
+                              (cdr parts))))
+          (claude-code-ide-mcp-server-delete-config-file))))))
+
+(ert-deftest claude-code-ide-test-build-agent-command-dispatch ()
+  "Test the agent command builder dispatches on claude-code-ide-agent."
+  (let ((claude-code-ide-cli-path "claude")
+        (claude-code-ide-pi-cli-path "pi")
+        (claude-code-ide-cli-debug nil)
+        (claude-code-ide-cli-extra-flags "")
+        (claude-code-ide-system-prompt nil)
+        (claude-code-ide-enable-mcp-server nil))
+    (let ((claude-code-ide-agent 'pi))
+      (should (string-prefix-p "pi " (claude-code-ide--build-agent-command))))
+    (let ((claude-code-ide-agent 'claude))
+      (should (string-prefix-p "claude " (claude-code-ide--build-agent-command))))))
+
+(ert-deftest claude-code-ide-test-build-env-vars ()
+  "Test environment variable construction for both agents."
+  (let ((claude-code-ide-no-flicker nil))
+    (let ((env (claude-code-ide--build-env-vars 'pi nil)))
+      (should (member "TERM_PROGRAM=emacs" env))
+      (should-not (cl-some (lambda (v) (string-prefix-p "CLAUDE_CODE_SSE_PORT=" v)) env))
+      (should-not (member "FORCE_CODE_TERMINAL=true" env)))
+    (let ((env (claude-code-ide--build-env-vars 'claude 5678)))
+      (should (member "CLAUDE_CODE_SSE_PORT=5678" env))
+      (should (member "TERM_PROGRAM=emacs" env))
+      (should (member "FORCE_CODE_TERMINAL=true" env))
+      (should-not (member "CLAUDE_CODE_NO_FLICKER=1" env)))
+    (let ((claude-code-ide-no-flicker t))
+      (let ((env (claude-code-ide--build-env-vars 'claude 5678)))
+        (should (member "CLAUDE_CODE_NO_FLICKER=1" env))))))
+
+(ert-deftest claude-code-ide-test-pi-mcp-config-file ()
+  "Test pi MCP config file writing, overwriting, and deletion."
+  (let* ((dir (make-temp-file "claude-code-ide-pi-test-" t))
+         (default-directory dir)
+         (claude-code-ide-pi-direct-tools nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'claude-code-ide-mcp-server-get-config)
+                   #'claude-code-ide-tests--pi-mock-config))
+          (let* ((file (claude-code-ide-mcp-server-write-config-file "sess-1"))
+                 (parsed (json-read-file file)))
+            (should (file-exists-p file))
+            (let* ((server (alist-get 'emacs-tools
+                                      (alist-get 'mcpServers parsed)))
+                   (url (alist-get 'url server)))
+              (should (string-match-p "/mcp/sess-1" url))
+              (should (string= "eager" (alist-get 'lifecycle server)))
+              ;; directTools omitted in proxy mode
+              (should (null (alist-get 'directTools server))))
+            ;; Second write overwrites the same deterministic file
+            (let ((file2 (claude-code-ide-mcp-server-write-config-file "sess-2")))
+              (should (string= file file2))
+              (should (string-match-p "sess-2"
+                                      (with-temp-buffer
+                                        (insert-file-contents file2)
+                                        (buffer-string))))))
+          ;; directTools added when enabled
+          (let ((claude-code-ide-pi-direct-tools t))
+            (let* ((file (claude-code-ide-mcp-server-write-config-file "sess-3"))
+                   (parsed (json-read-file file))
+                   (server (alist-get 'emacs-tools
+                                      (alist-get 'mcpServers parsed))))
+              (should (eq t (alist-get 'directTools server)))))
+          ;; Deletion removes the file and is idempotent
+          (claude-code-ide-mcp-server-delete-config-file)
+          (should-not (file-exists-p (claude-code-ide-mcp-server-config-file-path)))
+          (claude-code-ide-mcp-server-delete-config-file)
+          ;; Different directory gets a different file
+          (let ((other-file (claude-code-ide-mcp-server-config-file-path "/tmp/other-dir")))
+            (should-not (string= other-file
+                                 (claude-code-ide-mcp-server-config-file-path)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-code-ide-test-pi-adapter-probe ()
+  "Test the pi-mcp-adapter availability probe."
+  ;; pi list output without the adapter
+  (let ((claude-code-ide--pi-adapter-checked nil)
+        (claude-code-ide--pi-adapter-available nil)
+        (claude-code-ide-pi-cli-path "pi"))
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (_prog &optional _infile buffer &rest _args)
+                 (when (bufferp buffer)
+                   (with-current-buffer buffer
+                     (insert "some-other-package 1.0.0\n")))
+                 0)))
+      (should-not (claude-code-ide--pi-adapter-available-p)))
+    ;; Cached: a new probe must not run while the cache is valid
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (&rest _) (error "should not be called"))))
+      (should-not (claude-code-ide--pi-adapter-available-p))))
+  ;; pi list output with the adapter
+  (let ((claude-code-ide--pi-adapter-checked nil)
+        (claude-code-ide--pi-adapter-available nil)
+        (claude-code-ide-pi-cli-path "pi"))
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (_prog &optional _infile buffer &rest _args)
+                 (when buffer
+                   (with-current-buffer (if (bufferp buffer)
+                                            buffer
+                                          (current-buffer))
+                     (insert "pi-mcp-adapter 2.31.0\n")))
+                 0)))
+      (should (claude-code-ide--pi-adapter-available-p))))
+  ;; Missing adapter + MCP enabled signals a user error
+  (let ((claude-code-ide-agent 'pi)
+        (claude-code-ide-enable-mcp-server t)
+        (claude-code-ide--pi-adapter-checked t)
+        (claude-code-ide--pi-adapter-available nil))
+    (should-error (claude-code-ide--ensure-pi-mcp-adapter) :type 'user-error))
+  ;; MCP disabled: no error even without the adapter
+  (let ((claude-code-ide-agent 'pi)
+        (claude-code-ide-enable-mcp-server nil)
+        (claude-code-ide--pi-adapter-checked t)
+        (claude-code-ide--pi-adapter-available nil))
+    (should (null (claude-code-ide--ensure-pi-mcp-adapter)))))
+
+(ert-deftest claude-code-ide-test-pi-detect-cli ()
+  "Test CLI detection and status with the pi backend."
+  (let ((claude-code-ide-agent 'pi)
+        (claude-code-ide--cli-available nil)
+        (claude-code-ide-pi-cli-path "echo"))
+    (claude-code-ide--detect-cli)
+    (should claude-code-ide--cli-available)
+    (claude-code-ide--detect-cli)
+    (let ((claude-code-ide-pi-cli-path "nonexistent-pi-cli"))
+      (claude-code-ide--detect-cli)
+      (should (null claude-code-ide--cli-available))
+      ;; Status command reports missing CLI without error
+      (should (string-match-p "not installed"
+                              (claude-code-ide-check-status))))))
+
 (ert-deftest claude-code-ide-test-error-handling ()
   "Test error handling in various scenarios."
   ;; Test with nil CLI path
