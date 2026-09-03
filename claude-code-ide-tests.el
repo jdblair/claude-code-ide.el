@@ -290,6 +290,30 @@ have completed before cleanup.  Waits up to 5 seconds."
   (should (equal (claude-code-ide--default-buffer-name "/home/user/my-project@v1.0/")
                  "*claude-code[my-project@v1.0]*")))
 
+(ert-deftest claude-code-ide-test-default-buffer-name-pi-agent ()
+  "Test that the default buffer name includes the agent name."
+  (let ((claude-code-ide-agent 'pi))
+    (should (equal (claude-code-ide--agent-short-name) "pi"))
+    (should (equal (claude-code-ide--default-buffer-name "/home/user/project")
+                   "*pi[project]*"))))
+
+(ert-deftest claude-code-ide-test-agent-short-name ()
+  "Test the short name of each agent backend."
+  (should (equal (let ((claude-code-ide-agent 'claude))
+                   (claude-code-ide--agent-short-name))
+                 "claude-code"))
+  (should (equal (let ((claude-code-ide-agent 'pi))
+                   (claude-code-ide--agent-short-name))
+                 "pi")))
+
+(ert-deftest claude-code-ide-test-session-buffer-p ()
+  "Test session buffer detection for each agent backend."
+  (should (claude-code-ide--session-buffer-p "*claude-code[my-project]*"))
+  (should (claude-code-ide--session-buffer-p "*pi[my-project]*"))
+  (should-not (claude-code-ide--session-buffer-p "*scratch*"))
+  (should-not (claude-code-ide--session-buffer-p "*claude-code-ide-mcp*"))
+  (should-not (claude-code-ide--session-buffer-p nil)))
+
 (ert-deftest claude-code-ide-test-get-working-directory ()
   "Test working directory detection."
   (claude-code-ide-tests--with-temp-directory
@@ -1349,12 +1373,22 @@ If SESSION-ID is provided, it is included in the URL path."
                      (insert "pi-mcp-adapter 2.31.0\n")))
                  0)))
       (should (claude-code-ide--pi-adapter-available-p))))
-  ;; Missing adapter + MCP enabled signals a user error
+  ;; Missing adapter + MCP enabled signals a user error, even after
+  ;; the ensure function's forced re-probe
   (let ((claude-code-ide-agent 'pi)
         (claude-code-ide-enable-mcp-server t)
         (claude-code-ide--pi-adapter-checked t)
-        (claude-code-ide--pi-adapter-available nil))
-    (should-error (claude-code-ide--ensure-pi-mcp-adapter) :type 'user-error))
+        (claude-code-ide--pi-adapter-available nil)
+        (claude-code-ide-pi-cli-path "pi"))
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (_prog &optional _infile destination &rest _args)
+                 (when destination
+                   (with-current-buffer (if (bufferp destination)
+                                            destination
+                                          (current-buffer))
+                     (insert "some-other-package 1.0.0\n")))
+                 0)))
+      (should-error (claude-code-ide--ensure-pi-mcp-adapter) :type 'user-error)))
   ;; MCP disabled: no error even without the adapter
   (let ((claude-code-ide-agent 'pi)
         (claude-code-ide-enable-mcp-server nil)
@@ -2433,15 +2467,71 @@ BODY runs."
                #'claude-code-ide-mcp-server-tests--mock-ws-send)
               ((symbol-function 'ws-send-404)
                #'claude-code-ide-mcp-server-tests--mock-ws-send-404))
-      ;; Test send-json-response
-      (claude-code-ide-mcp-http-server--send-json-response
-       mock-request 200 '((test . "data")))
+      ;; Test send-json-response (closes the connection via throw)
+      (catch 'close-connection
+        (claude-code-ide-mcp-http-server--send-json-response
+         mock-request 200 '((test . "data"))))
       (should (equal claude-code-ide-mcp-server-tests--last-response-status 200))
       (should (string-match "test.*:.*data" claude-code-ide-mcp-server-tests--last-response))
 
-      ;; Test handle-get (404 response)
-      (claude-code-ide-mcp-http-server--handle-get mock-request)
-      (should (equal claude-code-ide-mcp-server-tests--last-response-status 404)))))
+      ;; Test handle-get (405 response with Allow: POST header)
+      (catch 'close-connection
+        (claude-code-ide-mcp-http-server--handle-get mock-request))
+      (should (equal claude-code-ide-mcp-server-tests--last-response-status 405))
+      (should (equal (assoc "Allow" claude-code-ide-mcp-server-tests--last-response-headers)
+                     '("Allow" . "POST")))
+      ;; Test send-empty-response (202 Accepted for notifications)
+      (catch 'close-connection
+        (claude-code-ide-mcp-http-server--send-empty-response mock-request))
+      (should (equal claude-code-ide-mcp-server-tests--last-response-status 202)))))
+
+(ert-deftest claude-code-ide-test-pi-adapter-probe-force ()
+  "Test that FORCE re-probes even when a cached result exists."
+  ;; Cache says unavailable; a forced probe finds a fresh install
+  (let ((claude-code-ide--pi-adapter-checked t)
+        (claude-code-ide--pi-adapter-available nil)
+        (claude-code-ide-pi-cli-path "pi")
+        (probed nil))
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (_prog &optional _infile destination &rest _args)
+                 (setq probed t)
+                 ;; The probe passes t as DESTINATION (current buffer)
+                 (when destination
+                   (with-current-buffer (if (bufferp destination)
+                                            destination
+                                          (current-buffer))
+                     (insert "npm:pi-mcp-adapter 2.31.0\n")))
+                 0)))
+      ;; Without FORCE the cache is returned and no probe runs
+      (should-not (claude-code-ide--pi-adapter-available-p))
+      (should-not probed)
+      ;; With FORCE the probe runs again and the cache is updated
+      (should (claude-code-ide--pi-adapter-available-p 'force))
+      (should probed)
+      (should claude-code-ide--pi-adapter-available)
+      ;; The refreshed cache is used by subsequent unforced calls
+      (cl-letf (((symbol-function 'call-process)
+                 (lambda (&rest _) (error "should not be called"))))
+        (should (claude-code-ide--pi-adapter-available-p))))))
+
+(ert-deftest claude-code-ide-test-pi-adapter-ensure-reprobes ()
+  "Test that `claude-code-ide--ensure-pi-mcp-adapter' re-probes before erroring."
+  ;; Stale negative cache, but the adapter has since been installed:
+  ;; no error must be signaled.
+  (let ((claude-code-ide-agent 'pi)
+        (claude-code-ide-enable-mcp-server t)
+        (claude-code-ide--pi-adapter-checked t)
+        (claude-code-ide--pi-adapter-available nil)
+        (claude-code-ide-pi-cli-path "pi"))
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (_prog &optional _infile destination &rest _args)
+                 (when destination
+                   (with-current-buffer (if (bufferp destination)
+                                            destination
+                                          (current-buffer))
+                     (insert "npm:pi-mcp-adapter 2.31.0\n")))
+                 0)))
+      (should (null (claude-code-ide--ensure-pi-mcp-adapter))))))
 
 ;;; MCP Server Session Context Tests
 
@@ -2919,6 +3009,219 @@ BODY runs."
 
       ;; Cleanup
       (claude-code-ide-mcp-server-unregister-session session-id))))
+
+;;; Tree-sitter Tool Tests
+
+;; Load emacs tools module (provides the treesit helpers)
+(condition-case nil
+    (require 'claude-code-ide-emacs-tools)
+  (error nil))
+
+(ert-deftest claude-code-ide-test-treesit-mode-language ()
+  "Test mapping major modes to tree-sitter languages."
+  (require 'claude-code-ide-emacs-tools)
+  ;; Tree-sitter based modes: strip the -ts-mode suffix
+  (should (eq (claude-code-ide-mcp-treesit--mode-language 'python-ts-mode)
+              'python))
+  (should (eq (claude-code-ide-mcp-treesit--mode-language 'rust-ts-mode)
+              'rust))
+  ;; c++-ts-mode uses the cpp language symbol
+  (should (eq (claude-code-ide-mcp-treesit--mode-language 'c++-ts-mode)
+              'cpp))
+  ;; Classic modes from the alist
+  (should (eq (claude-code-ide-mcp-treesit--mode-language 'emacs-lisp-mode)
+              'elisp))
+  (should (eq (claude-code-ide-mcp-treesit--mode-language 'python-mode)
+              'python))
+  (should (eq (claude-code-ide-mcp-treesit--mode-language 'yaml-mode)
+              'yaml))
+  ;; Unknown modes map to nil
+  (should (eq (claude-code-ide-mcp-treesit--mode-language
+               'fundamental-mode)
+              nil))
+  (should (eq (claude-code-ide-mcp-treesit--mode-language 'text-mode)
+              nil)))
+
+(ert-deftest claude-code-ide-test-treesit-mode-language-custom-alist ()
+  "Test that custom alist entries are honored."
+  (require 'claude-code-ide-emacs-tools)
+  (let ((claude-code-ide-mcp-treesit-mode-language-alist
+         (cons '("sh-mode" . bash)
+               claude-code-ide-mcp-treesit-mode-language-alist)))
+    (should (eq (claude-code-ide-mcp-treesit--mode-language 'sh-mode)
+                'bash)))
+  ;; Original alist unchanged outside the let
+  (should (eq (claude-code-ide-mcp-treesit--mode-language 'sh-mode)
+              nil)))
+
+(ert-deftest claude-code-ide-test-treesit-ensure-parser ()
+  "Test lazy parser creation logic.
+Stubs tree-sitter functions so the test is hermetic and does not
+require any grammar to be installed."
+  (require 'claude-code-ide-emacs-tools)
+  (with-temp-buffer
+    ;; Unmapped mode (fundamental-mode): never creates a parser,
+    ;; even when grammars are available
+    (let ((major-mode 'fundamental-mode))
+      (cl-letf (((symbol-function 'treesit-language-available-p)
+                 (lambda (&rest _) t))
+                ((symbol-function 'treesit-parser-create)
+                 (lambda (&rest _) (error "should not be called"))))
+        (should (null (claude-code-ide-mcp-treesit--ensure-parser)))))
+    ;; Mapped mode + available grammar: creates a parser for the
+    ;; mapped language
+    (let ((major-mode 'python-mode))
+      (cl-letf (((symbol-function 'treesit-language-available-p)
+                 (lambda (&rest _) t))
+                ((symbol-function 'treesit-parser-create)
+                 (lambda (lang &rest _)
+                   (should (eq lang 'python))
+                   'fake-parser)))
+        (should (eq (claude-code-ide-mcp-treesit--ensure-parser)
+                    'fake-parser))))
+    ;; Mapped mode + missing grammar: returns nil without creating
+    (let ((major-mode 'python-mode))
+      (cl-letf (((symbol-function 'treesit-language-available-p)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'treesit-parser-create)
+                 (lambda (&rest _) (error "should not be called"))))
+        (should (null (claude-code-ide-mcp-treesit--ensure-parser)))))))
+
+(ert-deftest claude-code-ide-test-instance-normalize-harness ()
+  "Test harness argument normalization for instance spawning."
+  (require 'claude-code-ide-tool-instance-management)
+
+  ;; nil means use the current backend
+  (let ((claude-code-ide-agent 'claude))
+    (should (eq (claude-code-ide-instance--normalize-harness nil) 'claude)))
+  (let ((claude-code-ide-agent 'pi))
+    (should (eq (claude-code-ide-instance--normalize-harness nil) 'pi)))
+
+  ;; Explicit harness names resolve to backend symbols
+  (should (eq (claude-code-ide-instance--normalize-harness "claude") 'claude))
+  (should (eq (claude-code-ide-instance--normalize-harness "pi") 'pi))
+
+  ;; Unknown values signal an error
+  (should-error (claude-code-ide-instance--normalize-harness "vibe"))
+  (should-error (claude-code-ide-instance--normalize-harness "")))
+
+(ert-deftest claude-code-ide-test-instance-spawn-harness-override ()
+  "Test that spawning with a harness switches the agent backend
+temporarily and restores global state afterwards."
+  (require 'claude-code-ide-tool-instance-management)
+
+  (let ((directory (make-temp-file "ccide-spawn-" t))
+        (seen-agent-at-start nil)
+        (seen-agent-at-detect nil)
+        (detect-called 0)
+        (orig-buffer-name-fn claude-code-ide-buffer-name-function)
+        (result nil))
+    (unwind-protect
+        (let ((claude-code-ide-agent 'claude))
+          (cl-letf (((symbol-function 'claude-code-ide--start-session)
+                     (lambda ()
+                       (setq seen-agent-at-start claude-code-ide-agent)))
+                    ((symbol-function 'claude-code-ide--detect-cli)
+                     (lambda ()
+                       (setq detect-called (1+ detect-called)
+                             seen-agent-at-detect claude-code-ide-agent)))
+                    ;; Avoid real delays in batch tests
+                    ((symbol-function 'sleep-for) (lambda (&rest _))))
+            (setq result (claude-code-ide-instance--spawn
+                          directory "*CCIDE Test Spawn*" nil "pi")))
+          ;; The spawned session must have seen the pi backend
+          (should (eq seen-agent-at-start 'pi))
+          ;; CLI detection must run against the pi backend
+          (should (eq seen-agent-at-detect 'pi))
+          (should (= detect-called 1))
+          ;; Globals are restored after the spawn
+          (should (eq claude-code-ide-agent 'claude))
+          (should (eq claude-code-ide-buffer-name-function orig-buffer-name-fn))
+          ;; Result reports the requested harness
+          (should (equal (plist-get result :harness) "pi"))
+          (should (equal (plist-get result :buffer-name) "*CCIDE Test Spawn*"))
+          (should (equal (plist-get result :status) "running")))
+      (delete-directory directory 'recursive))))
+
+(ert-deftest claude-code-ide-test-instance-spawn-no-harness-uses-current ()
+  "Test that spawning without a harness uses the current backend.
+Also verifies the default buffer name reflects the backend."
+  (require 'claude-code-ide-tool-instance-management)
+
+  (let ((directory (make-temp-file "ccide-spawn-" t))
+        (seen-agent-at-start nil)
+        (detect-called 0)
+        (result nil))
+    (unwind-protect
+        (let ((claude-code-ide-agent 'pi))
+          (cl-letf (((symbol-function 'claude-code-ide--start-session)
+                     (lambda ()
+                       (setq seen-agent-at-start claude-code-ide-agent)))
+                    ((symbol-function 'claude-code-ide--detect-cli)
+                     (lambda ()
+                       (setq detect-called (1+ detect-called))))
+                    ((symbol-function 'sleep-for) (lambda (&rest _))))
+            ;; No custom buffer name so the default naming runs while
+            ;; the pi backend is active
+            (setq result (claude-code-ide-instance--spawn
+                          directory nil nil nil)))
+          (should (eq seen-agent-at-start 'pi))
+          ;; No backend switch means no re-detection
+          (should (= detect-called 0))
+          (should (equal (plist-get result :harness) "pi"))
+          (should (string-prefix-p "*pi[" (plist-get result :buffer-name))))
+      (delete-directory directory 'recursive))))
+
+(ert-deftest claude-code-ide-test-instance-spawn-tool-harness-arg ()
+  "Test that the spawn-instance tool registers a harness argument
+with an enum of supported harnesses."
+  (require 'claude-code-ide-mcp-server)
+  (require 'claude-code-ide-tool-instance-management)
+
+  (claude-code-ide-tool-instance-management-setup)
+
+  (let ((spawn-tool (cl-find-if
+                     (lambda (tool)
+                       (equal (plist-get (claude-code-ide--normalize-tool-spec tool) :name)
+                              "claude-code-ide-mcp-spawn-instance"))
+                     claude-code-ide-mcp-server-tools)))
+    (should spawn-tool)
+    (let* ((normalized (claude-code-ide--normalize-tool-spec spawn-tool))
+           (harness-arg (cl-find-if (lambda (arg)
+                                      (equal (plist-get arg :name) "harness"))
+                                    (plist-get normalized :args))))
+      (should harness-arg)
+      (should (eq (plist-get harness-arg :type) 'string))
+      (should (plist-get harness-arg :optional))
+      (should (equal (append (plist-get harness-arg :enum) nil)
+                     '("claude" "pi"))))))
+
+(ert-deftest claude-code-ide-test-instance-spawn-invalid-harness-error ()
+  "Test that spawning with an unknown harness signals an error."
+  (require 'claude-code-ide-tool-instance-management)
+
+  (let ((directory (make-temp-file "ccide-spawn-" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'claude-code-ide--start-session)
+                   (lambda () (error "should not be called"))))
+          (should-error (claude-code-ide-instance--spawn
+                         directory nil nil "vibe")))
+      (delete-directory directory 'recursive))))
+
+(ert-deftest claude-code-ide-test-http-schema-includes-enum ()
+  "Test that enum values from tool args reach the MCP JSON schema."
+  (require 'claude-code-ide-mcp-http-server)
+
+  (let* ((args '((:name "harness"
+                        :type string
+                        :enum ["claude" "pi"])))
+         (schema (claude-code-ide-mcp-http-server--args-to-schema args))
+         (prop (cdr (assq 'harness schema))))
+    (should prop)
+    (should (equal (cdr (assq 'type prop)) "string"))
+    ;; Enum survives conversion as a JSON array-compatible vector
+    (should (equal (append (cdr (assq 'enum prop)) nil)
+                   '("claude" "pi")))))
 
 (provide 'claude-code-ide-tests)
 

@@ -38,13 +38,15 @@ Each instance has its own CLAUDE.md (instructions) and directory, but they share
   :directory "~/sunshine/brief-generator/"
   :buffer-name "*Claude Brief Generator*"
   :initial-message "Update all caches and generate briefing data"
+  :harness "pi"
   :async t)
 ```
 
 **Behavior**:
-- Opens Claude Code in specified directory
+- Opens the agent in specified directory
 - Creates named Emacs buffer for that instance
 - Instance reads its own `CLAUDE.md` from that directory
+- Optionally selects the harness: `"claude"` (Claude Code CLI, the default) or `"pi"` (the pi coding agent)
 - Optionally sends initial message to get started
 - Returns buffer name or instance ID
 

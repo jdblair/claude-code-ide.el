@@ -57,17 +57,35 @@ Set to t to enable instance management."
 (declare-function claude-code-ide--terminal-send-string "claude-code-ide")
 (declare-function claude-code-ide--terminal-send-return "claude-code-ide")
 (declare-function claude-code-ide--cleanup-dead-processes "claude-code-ide")
+(declare-function claude-code-ide--detect-cli "claude-code-ide")
 
 ;; External variables from claude-code-ide.el
 (defvar claude-code-ide--processes)
 (defvar claude-code-ide-buffer-name-function)
+(defvar claude-code-ide-agent)
+(defvar claude-code-ide--cli-available)
 
 ;;; Implementation Functions
 
-(defun claude-code-ide-instance--spawn (directory buffer-name initial-message)
-  "Spawn a new Claude Code instance in DIRECTORY with BUFFER-NAME.
+(defun claude-code-ide-instance--normalize-harness (harness)
+  "Return the agent backend symbol for HARNESS.
+HARNESS may be nil (use the current `claude-code-ide-agent'), or
+one of the strings \"claude\" or \"pi\".  Signals an error for
+any other value."
+  (cond
+   ((null harness) claude-code-ide-agent)
+   ((string= harness "claude") 'claude)
+   ((string= harness "pi") 'pi)
+   (t (error "Unknown harness %S.  Expected \"claude\" or \"pi\"" harness))))
+
+(defun claude-code-ide-instance--spawn (directory buffer-name initial-message &optional harness)
+  "Spawn a new agent instance in DIRECTORY with BUFFER-NAME.
 If INITIAL-MESSAGE is non-nil, send it to the instance after spawning.
-Returns information about the spawned instance."
+HARNESS optionally selects the agent backend to launch:
+\"claude\" for the Claude Code CLI or \"pi\" for the pi coding
+agent.  When nil or equal to the current `claude-code-ide-agent',
+the active backend is used.  Returns information about the spawned
+instance."
   ;; Check if instance management is enabled
   (unless claude-code-ide-instance-management-enabled
     (error "Instance management is disabled. Set claude-code-ide-instance-management-enabled to t to enable"))
@@ -75,40 +93,56 @@ Returns information about the spawned instance."
   (unless (file-directory-p directory)
     (error "Directory does not exist: %s" directory))
 
-  (let ((default-directory (expand-file-name directory))
-        (custom-buffer-name buffer-name))
-    ;; Temporarily override buffer name function if custom name provided
-    (let ((orig-buffer-name-fn claude-code-ide-buffer-name-function))
-      (when custom-buffer-name
-        (setq claude-code-ide-buffer-name-function
-              (lambda (_dir) custom-buffer-name)))
-      (unwind-protect
-          (progn
-            ;; Start the session (this will use the temporary buffer name function)
-            (claude-code-ide--start-session)
+  (let* ((agent (claude-code-ide-instance--normalize-harness harness))
+         (default-directory (expand-file-name directory))
+         (custom-buffer-name buffer-name)
+         (orig-buffer-name-fn claude-code-ide-buffer-name-function)
+         (orig-agent claude-code-ide-agent)
+         (orig-cli-available claude-code-ide--cli-available))
+    (unwind-protect
+        (progn
+          ;; Temporarily override buffer name function if custom name provided
+          (when custom-buffer-name
+            (setq claude-code-ide-buffer-name-function
+                  (lambda (_dir) custom-buffer-name)))
+          ;; Temporarily switch the agent backend when a different
+          ;; harness was requested.  `claude-code-ide-agent' drives
+          ;; buffer naming, command construction, environment setup
+          ;; and pi MCP adapter checks in `claude-code-ide--start-session'.
+          ;; Re-detect the CLI so availability is checked against the
+          ;; selected backend rather than a stale cache entry.
+          (unless (eq agent claude-code-ide-agent)
+            (setq claude-code-ide-agent agent)
+            (claude-code-ide--detect-cli))
+          ;; Start the session (this will use the temporary agent and
+          ;; buffer name function)
+          (claude-code-ide--start-session)
 
-            ;; Wait for terminal to be ready
-            (sleep-for 0.5)
+          ;; Wait for terminal to be ready
+          (sleep-for 0.5)
 
-            ;; Send initial message if provided
-            (when (and initial-message
-                       (not (string-empty-p initial-message))
-                       custom-buffer-name
-                       (get-buffer custom-buffer-name))
-              (with-current-buffer custom-buffer-name
-                ;; Wait a bit more for Claude to be fully initialized
-                (sleep-for 1.0)
-                (claude-code-ide--terminal-send-string initial-message)
-                (sit-for 0.1)
-                (claude-code-ide--terminal-send-return)))
+          ;; Send initial message if provided
+          (when (and initial-message
+                     (not (string-empty-p initial-message))
+                     custom-buffer-name
+                     (get-buffer custom-buffer-name))
+            (with-current-buffer custom-buffer-name
+              ;; Wait a bit more for the agent to be fully initialized
+              (sleep-for 1.0)
+              (claude-code-ide--terminal-send-string initial-message)
+              (sit-for 0.1)
+              (claude-code-ide--terminal-send-return)))
 
-            ;; Return instance information
-            (list :directory directory
-                  :buffer-name (or custom-buffer-name
-                                   (funcall claude-code-ide-buffer-name-function directory))
-                  :status "running"))
-        ;; Restore original buffer name function
-        (setq claude-code-ide-buffer-name-function orig-buffer-name-fn)))))
+          ;; Return instance information
+          (list :directory directory
+                :buffer-name (or custom-buffer-name
+                                 (funcall claude-code-ide-buffer-name-function directory))
+                :harness (if (eq agent 'pi) "pi" "claude")
+                :status "running"))
+      ;; Restore original settings
+      (setq claude-code-ide--cli-available orig-cli-available
+            claude-code-ide-agent orig-agent
+            claude-code-ide-buffer-name-function orig-buffer-name-fn))))
 
 (defun claude-code-ide-instance--send-message (buffer-name message)
   "Send MESSAGE to the Claude Code instance with BUFFER-NAME.
@@ -187,15 +221,16 @@ Returns success status."
 
 ;;; MCP Tool Handlers
 
-(defun claude-code-ide-mcp-spawn-instance (directory &optional buffer_name initial_message)
-  "MCP tool handler for spawning a new Claude Code instance.
+(defun claude-code-ide-mcp-spawn-instance (directory &optional buffer_name initial_message harness)
+  "MCP tool handler for spawning a new agent instance.
 DIRECTORY is the working directory for the new instance.
 BUFFER_NAME is an optional custom buffer name.
-INITIAL_MESSAGE is an optional message to send after spawning."
+INITIAL_MESSAGE is an optional message to send after spawning.
+HARNESS optionally selects the agent backend: \"claude\" or \"pi\"."
   (claude-code-ide-mcp-server-with-session-context nil
     (unless directory
       (error "directory parameter is required"))
-    (claude-code-ide-instance--spawn directory buffer_name initial_message)))
+    (claude-code-ide-instance--spawn directory buffer_name initial_message harness)))
 
 (defun claude-code-ide-mcp-send-to-instance (buffer_name message)
   "MCP tool handler for sending a message to an instance.
@@ -230,7 +265,7 @@ BUFFER_NAME is the name of the instance buffer to kill."
   (claude-code-ide-make-tool
    :function #'claude-code-ide-mcp-spawn-instance
    :name "claude-code-ide-mcp-spawn-instance"
-   :description "Spawn a new Claude Code instance in a different directory. The new instance will read its own CLAUDE.md from that directory and run independently. Use this for orchestrator patterns where a main instance delegates work to specialized instances with different contexts."
+   :description "Spawn a new agent instance in a different directory. The new instance will read its own CLAUDE.md from that directory and run independently. Use this for orchestrator patterns where a main instance delegates work to specialized instances with different contexts."
    :args '((:name "directory"
                   :type string
                   :description "Working directory for the new instance (absolute path)")
@@ -241,6 +276,11 @@ BUFFER_NAME is the name of the instance buffer to kill."
            (:name "initial_message"
                   :type string
                   :description "Message to send to the instance after spawning (optional)"
+                  :optional t)
+           (:name "harness"
+                  :type string
+                  :description "Agent harness to launch: \"claude\" for the Claude Code CLI or \"pi\" for the pi coding agent (optional, defaults to the current backend)"
+                  :enum ["claude" "pi"]
                   :optional t)))
 
   (claude-code-ide-make-tool

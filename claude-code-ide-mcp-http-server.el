@@ -119,10 +119,17 @@ Returns a cons cell of (server . port)."
 
 (defun claude-code-ide-mcp-http-server--handle-get (request)
   "Handle GET request to /mcp endpoint for SSE fallback."
-  ;; For now, return 404 as we're implementing Streamable HTTP only
-  ;; This could be extended to support SSE for backward compatibility
+  ;; Return 405 Method Not Allowed: we implement POST-only Streamable
+  ;; HTTP.  MCP clients (e.g. the StreamableHTTPClientTransport in the
+  ;; SDK used by pi-mcp-adapter) treat 405 as "server does not support
+  ;; an SSE stream" and continue, while any other non-success status
+  ;; (including 404) is reported as a connection failure.
   (with-slots (process) request
-    (ws-send-404 process)))
+    (ws-response-header process 405
+                        (cons "Allow" "POST")
+                        (cons "Content-Type" "text/plain")
+                        (cons "Content-Length" "0"))
+    (throw 'close-connection nil)))
 
 (defun claude-code-ide-mcp-http-server--handle-post (request)
   "Handle POST request to /mcp/* endpoints.
@@ -274,6 +281,11 @@ TOOL-SPEC should already be normalized."
             ;; Only add description if it's non-nil
             (when desc
               (setq prop-schema (append prop-schema `((description . ,desc)))))
+            ;; Enumerated values become a JSON array
+            (when-let ((enum (plist-get arg :enum)))
+              (setq prop-schema
+                    (append prop-schema
+                            `((enum . ,(if (listp enum) (vconcat enum) enum))))))
             (push (cons (intern name) prop-schema) schema))))
     ;; Return empty hash table for no args (encodes as {} not [])
     (make-hash-table :test 'equal)))
@@ -323,9 +335,11 @@ Returns a list of argument values in the order specified by ARG-SPECS."
       (throw 'close-connection nil))))
 
 (defun claude-code-ide-mcp-http-server--send-empty-response (request)
-  "Send an empty HTTP 200 response for notifications."
+  "Send an empty HTTP 202 Accepted response for notifications."
+  ;; The MCP Streamable HTTP spec requires 202 Accepted for
+  ;; notifications (requests without an id).
   (with-slots (process) request
-    (ws-response-header process 200
+    (ws-response-header process 202
                         (cons "Content-Type" "text/plain")
                         (cons "Content-Length" "0"))
     ;; Close the connection

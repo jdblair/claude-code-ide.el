@@ -90,6 +90,7 @@ echo "Test content for worker 2" > /tmp/claude-test-worker-2/test.txt
 {
   "directory": "/tmp/claude-test-worker-1",
   "buffer_name": "*Worker 1*",
+  "harness": "claude",
   "status": "running"
 }
 ```
@@ -98,6 +99,37 @@ echo "Test content for worker 2" > /tmp/claude-test-worker-2/test.txt
 - New Emacs buffer created with name `*Worker 1*`
 - Claude CLI starts in the worker directory
 - Instance reads its CLAUDE.md from worker directory
+
+### Test 2b: Spawn Instance (Alternate Harness)
+
+**Objective**: Spawn a new instance using the pi coding agent harness
+
+**Steps**:
+1. Call `mcp__emacs-tools__claude-code-ide-mcp-spawn-instance` with:
+   ```json
+   {
+     "directory": "/tmp/claude-test-worker-pi",
+     "buffer_name": "*Worker Pi*",
+     "harness": "pi"
+   }
+   ```
+2. Wait 2-3 seconds for instance to start
+3. Verify new buffer `*Worker Pi*` exists
+
+**Expected Result**:
+```json
+{
+  "directory": "/tmp/claude-test-worker-pi",
+  "buffer_name": "*Worker Pi*",
+  "harness": "pi",
+  "status": "running"
+}
+```
+
+**Success Criteria**:
+- pi CLI starts in the worker directory (requires `pi` in PATH and
+  `pi install npm:pi-mcp-adapter` when the MCP server is enabled)
+- Subsequent spawns without `harness` still use the default backend
 - Main instance remains responsive
 
 **Troubleshooting**:

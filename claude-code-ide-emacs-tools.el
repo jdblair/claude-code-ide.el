@@ -50,6 +50,59 @@
 (declare-function treesit-node-at "treesit" (pos &optional parser-or-lang named))
 (declare-function treesit-node-text "treesit" (node &optional no-property))
 (declare-function treesit-node-field-name "treesit" (node))
+(declare-function treesit-parser-list "treesit" (&optional buffer))
+(declare-function treesit-parser-create "treesit" (lang &optional buffer))
+(declare-function treesit-language-available-p "treesit" (lang &optional no-error))
+(declare-function treesit-available-p "treesit" ())
+(declare-function treesit-parser-root-node "treesit" (parser))
+
+(defcustom claude-code-ide-mcp-treesit-mode-language-alist
+  '(("python-mode" . python)
+    ("emacs-lisp-mode" . elisp)
+    ("lisp-interaction-mode" . elisp)
+    ("json-mode" . json)
+    ("js-json-mode" . json)
+    ("yaml-mode" . yaml)
+    ("c-mode" . c)
+    ("c++-mode" . cpp)
+    ("rust-mode" . rust)
+    ("js-mode" . javascript)
+    ("js2-mode" . javascript))
+  "Alist mapping classic major mode names to tree-sitter languages.
+Used when lazily creating a tree-sitter parser for a buffer whose
+major mode is not a tree-sitter based mode.  Tree-sitter based
+major modes (names ending in `-ts-mode') are handled automatically
+and do not need an entry here.
+
+Users can add entries for other classic major modes whose grammar
+is installed, e.g. (\"sh-mode\" . bash)."
+  :type '(alist :key-type string :value-type symbol)
+  :group 'claude-code-ide)
+
+(defun claude-code-ide-mcp-treesit--mode-language (mode)
+  "Return tree-sitter language symbol for major mode MODE.
+Handle tree-sitter based modes (`python-ts-mode', `c++-ts-mode',
+etc) by stripping the `-ts-mode' suffix, and classic modes via
+`claude-code-ide-mcp-treesit-mode-language-alist'.
+Return nil if MODE has no known tree-sitter language."
+  (let ((name (symbol-name mode)))
+    (cond
+     ((string-match "\\`\\(.*\\)-ts-mode\\'" name)
+      (let ((lang (match-string 1 name)))
+        ;; Language symbols use "cpp"; the mode is named "c++".
+        (if (string= lang "c++") 'cpp (intern lang))))
+     (t (cdr (assoc name
+                    claude-code-ide-mcp-treesit-mode-language-alist))))))
+
+(defun claude-code-ide-mcp-treesit--ensure-parser ()
+  "Create a tree-sitter parser in the current buffer if possible.
+The buffer's major mode must map to a language whose grammar is
+installed.  Return the new parser, or nil if not possible.  When
+a parser is created, the buffer is reparsed so the tool reports
+fresh node information."
+  (let ((lang (claude-code-ide-mcp-treesit--mode-language major-mode)))
+    (when (and lang (treesit-language-available-p lang))
+      (treesit-parser-create lang))))
 
 ;;; Tool Functions
 
@@ -248,7 +301,12 @@ Optional LINE and COLUMN specify the position (1-based line, 0-based column).
 If WHOLE_FILE is non-nil, show the entire file's syntax tree.
 If neither position is specified, defaults to current cursor position (point).
 If INCLUDE_ANCESTORS is non-nil, include parent node hierarchy.
-If INCLUDE_CHILDREN is non-nil, include child nodes."
+If INCLUDE_CHILDREN is non-nil, include child nodes.
+
+If the buffer has no tree-sitter parser (e.g. the major mode is not
+a tree-sitter based mode, or the grammar was missing when the mode
+was activated), try to lazily create one from the buffer's major
+mode when the grammar is installed."
   (if (not file-path)
       (error "file_path parameter is required")
     (claude-code-ide-mcp-server-with-session-context nil
@@ -258,10 +316,18 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
             (let ((target-buffer (or (find-buffer-visiting file-path)
                                      (find-file-noselect file-path))))
               (with-current-buffer target-buffer
-                (let* ((parsers (treesit-parser-list))
-                       (parser (car parsers)))
+                (let* ((parser (or (car (treesit-parser-list))
+                                   ;; Lazily create a parser for buffers
+                                   ;; whose mode maps to an installed grammar.
+                                   (claude-code-ide-mcp-treesit--ensure-parser))))
                   (if (not parser)
-                      (format "No tree-sitter parser available for %s" file-path)
+                      (format "No tree-sitter parser available for %s%s"
+                              file-path
+                              (let ((lang (claude-code-ide-mcp-treesit--mode-language
+                                           major-mode)))
+                                (if lang
+                                    (format " (grammar for %s not installed)" lang)
+                                  "")))
                     (let* ((root-node (treesit-parser-root-node parser))
                            ;; Determine position from line/column or use current point
                            (pos (cond (whole_file nil)
@@ -460,6 +526,12 @@ This is useful during development when tools are added or modified."
   ;; Just re-setup tools (file is already loaded)
   ;; If you need to reload from disk, use M-x load-file manually
   (claude-code-ide-emacs-tools-setup)
+  ;; Bring the HTTP listener back up: stopping the server above also
+  ;; cleared the registered sessions and the port; the server is
+  ;; normally (re)started by `claude-code-ide-mcp-server-ensure-server'
+  ;; when a session starts, so without this a restart would leave the
+  ;; tools registered but nothing listening.
+  (claude-code-ide-mcp-server-ensure-server)
   (message "MCP tools server restarted"))
 
 (provide 'claude-code-ide-emacs-tools)

@@ -654,7 +654,8 @@ This function binds:
 (defun claude-code-ide--session-buffer-p (buffer)
   "Check if BUFFER belongs to a Claude Code session."
   (when-let ((name (if (stringp buffer) buffer (buffer-name buffer))))
-    (string-prefix-p "*claude-code[" name)))
+    (or (string-prefix-p "*claude-code[" name)
+        (string-prefix-p "*pi[" name))))
 
 (defun claude-code-ide--terminal-reflow-filter (original-fn &rest args)
   "Filter terminal reflows to prevent height-only resize triggers.
@@ -689,9 +690,19 @@ width has actually changed, working around the scrolling glitch."
 
 ;;; Helper Functions
 
+(defun claude-code-ide--agent-short-name ()
+  "Return the short name of the active agent backend.
+Used in buffer names, e.g. `*pi[project]*'.  See
+`claude-code-ide-agent'."
+  (if (eq claude-code-ide-agent 'pi)
+      "pi"
+    "claude-code"))
+
 (defun claude-code-ide--default-buffer-name (directory)
-  "Generate default buffer name for DIRECTORY."
-  (format "*claude-code[%s]*"
+  "Generate default buffer name for DIRECTORY.
+The name includes the active agent name, e.g. `*pi[my-project]*'."
+  (format "*%s[%s]*"
+          (claude-code-ide--agent-short-name)
           (file-name-nondirectory (directory-file-name directory))))
 
 (defun claude-code-ide--get-working-directory ()
@@ -904,10 +915,13 @@ The Emacs context prompt is always included; the value of
 (defvar claude-code-ide--pi-adapter-available nil
   "Cached result of the pi-mcp-adapter availability probe.")
 
-(defun claude-code-ide--pi-adapter-available-p ()
+(defun claude-code-ide--pi-adapter-available-p (&optional force)
   "Return non-nil if the pi-mcp-adapter package is installed for pi.
 Runs the pi CLI's `list' command once per Emacs session and caches
-the result."
+the result.  If FORCE is non-nil, probe again even when a cached
+result exists."
+  (when force
+    (setq claude-code-ide--pi-adapter-checked nil))
   (unless claude-code-ide--pi-adapter-checked
     (setq claude-code-ide--pi-adapter-checked t
           claude-code-ide--pi-adapter-available
@@ -926,7 +940,10 @@ it pi would fail at startup."
   (when (and (eq claude-code-ide-agent 'pi)
              claude-code-ide-enable-mcp-server
              (not (claude-code-ide--pi-adapter-available-p)))
-    (user-error "pi-mcp-adapter is not installed.  Run `pi install npm:pi-mcp-adapter', or set `claude-code-ide-enable-mcp-server' to nil")))
+    ;; The cached probe may predate a fresh install; probe once more
+    ;; before erroring so users don't have to restart Emacs.
+    (unless (claude-code-ide--pi-adapter-available-p 'force)
+      (user-error "pi-mcp-adapter is not installed.  Run `pi install npm:pi-mcp-adapter', or set `claude-code-ide-enable-mcp-server' to nil"))))
 
 (defun claude-code-ide--build-claude-command (&optional continue resume session-id)
   "Build the Claude command with optional flags.
