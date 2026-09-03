@@ -3201,6 +3201,42 @@ Also verifies the default buffer name reflects the backend."
           (should (string-prefix-p "*pi[" (plist-get result :buffer-name))))
       (delete-directory directory 'recursive))))
 
+(ert-deftest claude-code-ide-test-instance-spawn-initial-message-default-name ()
+  "Test that an initial message is delivered to the session's default
+buffer when no custom buffer name is given."
+  (require 'claude-code-ide-tool-instance-management)
+
+  (let* ((directory (make-temp-file "ccide-spawn-" t))
+         (sent nil)
+         (default-name nil))
+    (unwind-protect
+        (let ((claude-code-ide-agent 'claude))
+          (cl-letf (((symbol-function 'claude-code-ide--start-session)
+                     (lambda ()
+                       ;; Emulate session startup creating the default buffer
+                       (setq default-name
+                             (funcall claude-code-ide-buffer-name-function directory))
+                       (get-buffer-create default-name)))
+                    ((symbol-function 'claude-code-ide--detect-cli) (lambda (&rest _)))
+                    ((symbol-function 'sleep-for) (lambda (&rest _)))
+                    ((symbol-function 'sit-for) (lambda (&rest _)))
+                    ((symbol-function 'claude-code-ide--terminal-send-string)
+                     (lambda (text)
+                       (setq sent (cons (buffer-name (current-buffer)) text))))
+                    ((symbol-function 'claude-code-ide--terminal-send-return)
+                     (lambda (&rest _))))
+            (let ((result (claude-code-ide-instance--spawn
+                           directory nil "hello worker")))
+              ;; Message reached the default-named session buffer
+              (should (equal (car sent) default-name))
+              (should (equal (cdr sent) "hello worker"))
+              (should (equal (plist-get result :buffer-name) default-name))
+              (should (string-prefix-p "*claude-code[" default-name)))))
+      (when default-name
+        (let ((buf (get-buffer default-name)))
+          (when buf (kill-buffer buf))))
+      (delete-directory directory 'recursive))))
+
 (ert-deftest claude-code-ide-test-instance-spawn-tool-harness-arg ()
   "Test that the spawn-instance tool registers a harness argument
 with an enum of supported harnesses."

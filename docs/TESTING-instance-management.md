@@ -186,6 +186,10 @@ claude session remains registered.
 - Message appears in buffer without manual intervention
 - Main instance not blocked during spawn
 
+Variant 3b: repeat without `buffer_name`; the message must still be
+delivered, to the session's default-named buffer (`*claude-code[dir]*`
+or `*pi[dir]*`).
+
 ---
 
 ### Test 4: List Multiple Instances

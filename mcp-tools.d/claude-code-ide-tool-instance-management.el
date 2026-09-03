@@ -121,17 +121,22 @@ instance."
           ;; Wait for terminal to be ready
           (sleep-for 0.5)
 
-          ;; Send initial message if provided
-          (when (and initial-message
-                     (not (string-empty-p initial-message))
-                     custom-buffer-name
-                     (get-buffer custom-buffer-name))
-            (with-current-buffer custom-buffer-name
-              ;; Wait a bit more for the agent to be fully initialized
-              (sleep-for 1.0)
-              (claude-code-ide--terminal-send-string initial-message)
-              (sit-for 0.1)
-              (claude-code-ide--terminal-send-return)))
+          ;; Send initial message if provided, addressed to the spawned
+          ;; session's buffer: the custom name when given, otherwise the
+          ;; agent's default naming (computed while the spawned agent is
+          ;; still active)
+          (let ((target-buffer (or custom-buffer-name
+                                   (funcall claude-code-ide-buffer-name-function
+                                            directory))))
+            (when (and initial-message
+                       (not (string-empty-p initial-message))
+                       (get-buffer target-buffer))
+              (with-current-buffer target-buffer
+                ;; Wait a bit more for the agent to be fully initialized
+                (sleep-for 1.0)
+                (claude-code-ide--terminal-send-string initial-message)
+                (sit-for 0.1)
+                (claude-code-ide--terminal-send-return))))
 
           ;; Return instance information
           (list :directory directory

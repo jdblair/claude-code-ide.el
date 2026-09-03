@@ -52,7 +52,7 @@
 (declare-function treesit-node-field-name "treesit" (node))
 (declare-function treesit-parser-list "treesit" (&optional buffer))
 (declare-function treesit-parser-create "treesit" (lang &optional buffer))
-(declare-function treesit-language-available-p "treesit" (lang &optional no-error))
+(declare-function treesit-language-available-p "treesit" (lang &optional detail))
 (declare-function treesit-available-p "treesit" ())
 (declare-function treesit-parser-root-node "treesit" (parser))
 
