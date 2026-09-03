@@ -1254,6 +1254,17 @@ This function handles:
              (buffer-live-p existing-buffer)
              existing-process)
         (claude-code-ide--toggle-existing-window existing-buffer working-dir)
+      ;; A live process with no buffer matching the current agent's
+      ;; naming means a session of another agent backend is already
+      ;; running in this directory: buffer names include the agent
+      ;; name, while the process table is keyed by directory alone.
+      ;; Starting a second session here would orphan the first from
+      ;; the process table, so refuse instead.
+      (when existing-process
+        (user-error "A session of another agent backend is already running in %s (%s); kill it first or switch `claude-code-ide-agent' before starting a session here"
+                    working-dir
+                    (or (buffer-name (process-buffer existing-process))
+                        "no buffer")))
       ;; Ensure the selected terminal backend is available before starting MCP
       (claude-code-ide--terminal-ensure-backend)
       ;; Start MCP server with project directory

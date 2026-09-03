@@ -137,6 +137,27 @@ echo "Test content for worker 2" > /tmp/claude-test-worker-2/test.txt
 - Verify directories exist and have read/write permissions
 - Check MCP server logs for errors
 
+### Test 2c: Spawn Refused While Other Backend Session Is Live
+
+**Objective**: Verify that spawning into a directory that already hosts a
+live session of the other backend is refused instead of orphaning it
+
+**Steps**:
+1. Start a claude session in a directory (e.g. `/tmp/claude-test-clash`)
+2. Call `mcp__emacs-tools__claude-code-ide-mcp-spawn-instance` with:
+   ```json
+   {
+     "directory": "/tmp/claude-test-clash",
+     "buffer_name": "*Worker Pi*",
+     "harness": "pi"
+   }
+   ```
+
+**Expected Result**: Tool error naming the directory and the existing
+session's buffer, instructing to kill it first or switch
+`claude-code-ide-agent`.  No second terminal is started and the existing
+claude session remains registered.
+
 ---
 
 ### Test 3: Spawn with Initial Message

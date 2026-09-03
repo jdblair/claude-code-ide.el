@@ -314,6 +314,35 @@ have completed before cleanup.  Waits up to 5 seconds."
   (should-not (claude-code-ide--session-buffer-p "*claude-code-ide-mcp*"))
   (should-not (claude-code-ide--session-buffer-p nil)))
 
+(ert-deftest claude-code-ide-test-start-session-refuses-other-backend ()
+  "Test that starting a session is refused while another backend's
+session is live in the same directory.
+Buffer names include the agent name while the process table is
+keyed by directory, so a pi session in a directory with a live
+claude process must not start a second terminal that would
+orphan the existing session."
+  (let* ((dir (make-temp-file "ccide-start-" t))
+         (proc-buf (get-buffer-create " *ccide-test-proc*"))
+         (proc (start-process "ccide-test-sleep" proc-buf
+                              (or (executable-find "sleep") "sleep") "60")))
+    (unwind-protect
+        (let ((claude-code-ide-agent 'pi))
+          (cl-letf (((symbol-function 'claude-code-ide--ensure-cli)
+                     (lambda () t))
+                    ((symbol-function 'claude-code-ide--get-working-directory)
+                     (lambda () dir)))
+            (puthash dir proc claude-code-ide--processes)
+            ;; With agent pi the expected buffer is *pi[dir]*; the live
+            ;; process belongs to a claude session, so starting must refuse
+            (let ((err (should-error (claude-code-ide--start-session)
+                                     :type 'user-error)))
+              (should (string-match-p "another agent backend"
+                                      (error-message-string err))))))
+      (when (process-live-p proc) (delete-process proc))
+      (kill-buffer proc-buf)
+      (remhash dir claude-code-ide--processes)
+      (delete-directory dir :recursive))))
+
 (ert-deftest claude-code-ide-test-get-working-directory ()
   "Test working directory detection."
   (claude-code-ide-tests--with-temp-directory

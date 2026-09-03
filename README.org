@@ -590,12 +590,14 @@ Emacs restart by default, direct tools work best with a fixed port:
 
 ** Notes
 
-- Session buffers are still named =*claude-code[dir]*= regardless of the
-  active agent; MCP session ids use a =pi-<dir>-<ts>= prefix for pi.
+- Session buffer names include the active agent, e.g. =*pi[my-project]*=
+  for pi vs =*claude-code[my-project]*= for Claude Code; MCP session ids
+  use a =pi-<dir>-<ts>= prefix for pi.  Starting a session in a directory
+  where another backend's session is already live is refused.
 - =claude-code-ide-cli-debug= maps to pi's =--verbose= flag, which only
   increases startup verbosity.
-- Buffer names, side-window layout, and all window/session commands behave
-  identically for both agents.
+- Side-window layout and window/session commands behave identically for
+  both agents.
 
 * License
 
