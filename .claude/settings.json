@@ -2,21 +2,32 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
-            "type": "command",
-            "command": "./scripts/format-and-clean.sh --hook"
+            "command": "./scripts/format-and-clean.sh --hook",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Write|Edit|MultiEdit"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bd prime --hook-json",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
       }
     ],
     "Stop": [
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "./scripts/compile-and-test.sh --hook"
+            "command": "./scripts/compile-and-test.sh --hook",
+            "type": "command"
           }
         ]
       }
