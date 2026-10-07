@@ -39,6 +39,13 @@
 
 (defvar claude-code-ide-mcp-server--current-session-id)
 
+;; Protocol errors signalled by the dispatch and argument-validation code.
+;; Without `define-error' these are "peculiar" signals with no
+;; `error-conditions', so no condition-case for `error' can catch them and
+;; they escape the web-server process filter, leaving the client with no
+;; reply at all.
+(define-error 'json-rpc-error "JSON-RPC Error" 'error)
+
 ;; Require web-server at runtime to avoid batch mode issues
 (unless (featurep 'web-server)
   (condition-case err
@@ -171,6 +178,13 @@ with the appropriate session context."
     (json-parse-error
      (claude-code-ide-mcp-http-server--send-json-error
       request nil -32700 "Parse error"))
+
+    ;; Must precede the `error' clause below: `json-rpc-error' inherits from
+    ;; `error', and condition-case takes the first matching handler.
+    (json-rpc-error
+     (claude-code-ide-debug "JSON-RPC error: %S" (cdr err))
+     (claude-code-ide-mcp-http-server--send-json-error
+      request nil (nth 1 err) (nth 2 err)))
 
     (quit
      (claude-code-ide-debug "Request cancelled by user (C-<escape>)")
